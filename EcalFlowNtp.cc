@@ -5,7 +5,6 @@
 #include "FWCore/Framework/interface/Frameworkfwd.h"
 #include "FWCore/Framework/interface/EDAnalyzer.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
-#include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
 #include "FWCore/ServiceRegistry/interface/Service.h"
@@ -19,6 +18,10 @@
 #include "DataFormats/EcalRecHit/interface/EcalRecHitCollections.h"
 #include "DataFormats/EcalDetId/interface/EBDetId.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticle.h"
+
+#include "DataFormats/Candidate/interface/Candidate.h"
+#include "DataFormats/ParticleFlowCandidate/interface/PFCandidate.h"
+#include "DataFormats/ParticleFlowCandidate/interface/PFCandidateFwd.h"
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 //ES  stuff
 #include "Geometry/EcalAlgo/interface/EcalPreshowerGeometry.h"
@@ -37,13 +40,11 @@
 //#include "CondFormats/RPFlatParams/interface/RPFlatParams.h"
 
 #include "DataFormats/EgammaReco/interface/BasicCluster.h"
-#include "DataFormats/EcalRecHit/interface/EcalRecHitCollections.h"
 #include "DataFormats/EcalDetId/interface/EBDetId.h"
 #include "DataFormats/DetId/interface/DetId.h"
 #include "DataFormats/Math/interface/Point3D.h"
 
 #include "FWCore/Framework/interface/Event.h"
-#include "FWCore/Framework/interface/EventSetup.h"
 #include "DataFormats/Common/interface/Handle.h"
 #include "FWCore/Framework/interface/ESHandle.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
@@ -53,6 +54,12 @@
 /// EgammaCoreTools
 //#include "RecoEcal/EgammaCoreTools/interface/PositionCalc.h"
 #include "RecoEcal/EgammaCoreTools/interface/EcalEtaPhiRegion.h"
+#include "RecoEcal/EgammaCoreTools/interface/EcalTools.h"
+#include "Geometry/Records/interface/CaloGeometryRecord.h"
+#include "Geometry/CaloGeometry/interface/CaloGeometry.h"
+#include "Geometry/CaloGeometry/interface/CaloSubdetectorGeometry.h"
+
+
 
 #include "TVector3.h"
 #include "assert.h"
@@ -125,6 +132,7 @@ EcalFlowNtp::EcalFlowNtp(const edm::ParameterSet& ps) :
   vertexSrc_ = ps.getUntrackedParameter<edm::InputTag>("vertexSrc",edm::InputTag("offlinePrimaryVertices"));
   srcTracks_ = ps.getUntrackedParameter<std::string>("qualityString",std::string("highPurity"));
   srcTowers_ = ps.getParameter<edm::InputTag>("srcTowers");
+  particleFlow_ = ps.getParameter<edm::InputTag>("pfCandidatesTag");
   ptBins_ = ps.getParameter<std::vector<double> >("ptBins");
   NptBins_ = ps.getParameter<std::vector<double> >("NptBins");
   etaBins_ = ps.getParameter<std::vector<double> >("etaBins");
@@ -142,6 +150,9 @@ EcalFlowNtp::EcalFlowNtp(const edm::ParameterSet& ps) :
   cutByLeadingTrackPt_ = ps.getParameter<bool>("cutByLeadingTrackPt");
   leadingTrackPtMin_ = ps.getParameter<double>("leadingTrackPtMin");
   leadingTrackPtMax_ = ps.getParameter<double>("leadingTrackPtMax");
+  swissThreshold_ = ps.getParameter<double>("swissThreshold");
+  timeThreshold_ = ps.getParameter<double>("timeThreshold");
+  avoidIeta85_ = ps.getParameter<double>("avoidIeta85");
   
   centProvider = 0;
   currentBufferEventIndexCluster = 0;
@@ -300,6 +311,8 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
   
   edm::ESHandle<CaloGeometry> geoHandle;
   iSetup.get<CaloGeometryRecord>().get(geoHandle);     
+  const CaloGeometry* caloGeom = geoHandle.product();
+
   geometry_p = geoHandle->getSubdetectorGeometry(DetId::Ecal,EcalBarrel);
   //  geometryEE_p = geoHandle->getSubdetectorGeometry(DetId::Ecal,EcalEndcap);
   geometryES_p = geoHandle->getSubdetectorGeometry(DetId::Ecal, EcalPreshower);
@@ -477,6 +490,24 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
     tEtvsHPHiTracksPlus_->Fill(tHighPurityTracks_, etHFtowerSumPlus_);
     tEtvsHPHiTracksMinus_->Fill(tHighPurityTracks_, etHFtowerSumMinus_);
     /////////////////////////////////////////////////////////
+
+    ////////////// Particle Flow Objects ////////////////////
+    edm::Handle<reco::PFCandidateCollection> pfCandidates;   
+    iEvent.getByLabel(particleFlow_, pfCandidates);
+
+    for( unsigned ic1=0; ic1<pfCandidates->size(); ic1++ ) {
+
+      const reco::PFCandidate& cand = (*pfCandidates)[ic1];
+     
+      if(cand.particleId() != PFCandidate::gamma) continue;
+      float _pfpt = cand.pt();
+      if(_pfpt < 0.4) continue;
+      if(fabs(cand.eta()) > 1.5) continue;
+
+      PFPhotonPt->Fill(_pfpt);
+      }
+
+    /////////////////////////////////////////////////////////
     
     //Read collection
     
@@ -493,7 +524,19 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
     float etot =0;
     EcalRecHitCollection::const_iterator itb;
     
+    double rhEt;
     for(itb=rhEBpi0->begin(); itb!=rhEBpi0->end(); ++itb){
+
+      ////////////// Applying the swiss-cross and timing cuts/////
+      //      const GlobalPoint &position = caloGeom->getPosition(itb->id());
+      //      rhEt = itb->energy()/cosh(position.eta()); // Not using at the moment 
+      double  swissCrx = EcalTools::swissCross  (itb->id(), *hitCollection_p, 0., avoidIeta85_);
+      SwissCrossCut->Fill(swissCrx);
+      Timing->Fill(abs(itb->time()));
+      
+      if(    (swissCrx > swissThreshold_)     ||     ( abs(itb->time()) > timeThreshold_) ) continue;
+
+      ////////////////////////////////////////////////////////////
       
       EBDetId id(itb->id());
       double energy = itb->energy();
@@ -636,7 +679,9 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
       
       float e3x3 = 0; 
       float e5x5 = 0;
-      
+      double e4_e1 = 0;
+      double Swiss_cross;
+
       for(unsigned int j=0; j<RecHitsInWindow.size();j++){
 	EBDetId det = (EBDetId)RecHitsInWindow[j].id(); 
 	
@@ -656,7 +701,23 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	
 	int dx = diff_neta_s(seed_ieta,ieta);
 	int dy = diff_nphi_s(seed_iphi,iphi);//
-	
+
+	double eRight = 0;
+	double eTop = 0;
+	double eLeft = 0;
+	double eBottom = 0; 	
+	/////////// adding swiss-cross cut ////
+
+	if(dx == 1) eRight =  en;
+	if(dy == 1) eTop =  en;
+	if(dy == -1) eLeft =  en;
+	if(dx == -1) eBottom =  en;
+
+	e4_e1 += (eRight + eTop + eLeft + eBottom);
+	Swiss_cross = 1 - e4_e1;
+
+	//	if(Swiss_cross > 0.87) continue;	//Not applying the swiss-cross cut
+	///////////////////////////////////////
 	if(abs(dx)<=1 && abs(dy)<=1) {
 	  e3x3 += en; 
 	  if(dx <= 0 && dy <=0) s4s9_tmp[0] += en; 
@@ -784,8 +845,9 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
       acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustS49 = clustrS49;
       acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustS25 = clustrS25;
       acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].hfAllAngle = HFAngle;
-      
-      PhotonClusterPt->Fill(clustrPt);
+
+      PhotonClusterPt->Fill(clustrPt);      
+
       currentAcceptedClusterNumber++;
       
       if(currentAcceptedClusterNumber > maximumClustersInSingleEvent)
@@ -980,8 +1042,8 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 		  }
 	      }
 	      
-	      if(combinedEventPi0Mass >=0.11 && combinedEventPi0Mass < 0.17) {
-	      //	      if(combinedEventPi0Mass >=0.19 && combinedEventPi0Mass < 0.24) {
+	      //     if(combinedEventPi0Mass >=0.11 && combinedEventPi0Mass < 0.17) {
+	      if(combinedEventPi0Mass >=0.19 && combinedEventPi0Mass < 0.24) {
 	      //	      if(combinedEventPi0Mass >=0.24 && combinedEventPi0Mass < 0.28) {
 		//Used to calculate the correlation function from the side-band
 		_pi0Spectrum->Fill(pi0Eta, pi0Pt, occ);
@@ -1089,8 +1151,14 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 		{
 		  sprintf(histogramName5, "hSignalPtBin%d", kPt);
 		  
-		  hSignal[histogramName5]->Fill(deltaEta,deltaPhi,1.0/nMult_trg/nMult_ass);
-		  hSignal[histogramName5]->Fill(deltaEta,2*_pi - deltaPhi,1.0/nMult_trg/nMult_ass); 
+		  //		  hSignal[histogramName5]->Fill(deltaEta,deltaPhi,1.0/nMult_trg/nMult_ass);
+		  //		  hSignal[histogramName5]->Fill(deltaEta,2*_pi - deltaPhi,1.0/nMult_trg/nMult_ass); 
+		  hSignal[histogramName5]->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
+		  hSignal[histogramName5]->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
+		  hSignal[histogramName5]->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
+		  hSignal[histogramName5]->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
+		  hSignal[histogramName5]->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg);
+		  hSignal[histogramName5]->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg); 
 		}
 	    }
 	  }
@@ -1466,8 +1534,14 @@ void EcalFlowNtp::endJob() {
 		      {
 			sprintf(histogramName6, "hBackgroundPtBin%d", kPt);
 
-			hBackground[histogramName6]->Fill(deltaEta,deltaPhi,1.0/nMult_trg1/nMult_ass1);
-			hBackground[histogramName6]->Fill(deltaEta,2*_pi - deltaPhi,1.0/nMult_trg1/nMult_ass1);
+			//			hBackground[histogramName6]->Fill(deltaEta,deltaPhi,1.0/nMult_trg1/nMult_ass1);
+			//hBackground[histogramName6]->Fill(deltaEta,2*_pi - deltaPhi,1.0/nMult_trg1/nMult_ass1);
+			hBackground[histogramName6]->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
+			hBackground[histogramName6]->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
+			hBackground[histogramName6]->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
+			hBackground[histogramName6]->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
+			hBackground[histogramName6]->Fill(fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
+			hBackground[histogramName6]->Fill(-fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
 		      }
 		  }
 		}
@@ -1609,6 +1683,15 @@ void EcalFlowNtp::initHistos(const edm::Service<TFileService> & fs)
 
   PhotonClusterPt = pi0Related.make<TH1D>("PhotonClusterPt", "Photon cluster p_{T}", 100, 0, 100);
   PhotonClusterPt->SetXTitle("Transverse momentum p_T (GeV/c)");
+
+  PFPhotonPt = pi0Related.make<TH1D>("PFPhotonPt", "PF Photon p_{T}", 100, 0, 100);
+  PFPhotonPt->SetXTitle("Transverse momentum p_T (GeV/c)");
+
+  SwissCrossCut = pi0Related.make<TH1D>("SwissCrossCut", "Swiss cross cut", 100, 0.2, 1.2);
+  SwissCrossCut->SetXTitle("1 - E4/E1");
+
+  Timing = pi0Related.make<TH1D>("Timing", "RecHit timing [ns]", 100, 0., 80.);
+  Timing->SetXTitle("RecHit timing [ns]");
 
   _pi0Spectrum = pi0Related.make<TH3F>("_pi0Spectrum", ";#eta;p_{T};occ var",
 				       etaBins_.size()-1, &etaBins_[0],
