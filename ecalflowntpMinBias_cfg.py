@@ -48,11 +48,11 @@ process.hltTrack12.HLTPaths = ["HLT_PAFullTrack12_v1",
 
 process.hltTrack20 = process.hltHighLevel.clone()
 process.hltTrack20.HLTPaths = ["HLT_PAFullTrack20_v1",
-                               "HLT_PAFullTrack20_v1"]
+                               "HLT_PAFullTrack20_v2"]
 
 process.hltTrack30 = process.hltHighLevel.clone()
 process.hltTrack30.HLTPaths = ["HLT_PAFullTrack30_v1",
-                               "HLT_PAFullTrack30_v1"]
+                               "HLT_PAFullTrack30_v2"]
 
 process.hltTrack12.andOr = cms.bool(True)
 process.hltTrack12.throw = cms.bool(False)
@@ -107,9 +107,6 @@ process.EcalFlowNtp.avoidIeta85 = cms.double(False)
 
 
 process.EcalFlowNtpMinBias = process.EcalFlowNtp.clone()
-process.EcalFlowNtpTrack12 = process.EcalFlowNtp.clone()
-process.EcalFlowNtpTrack20 = process.EcalFlowNtp.clone()
-process.EcalFlowNtpTrack30 = process.EcalFlowNtp.clone()
 
 process.MinBias = cms.Path(process.hltSingleTrigger *
                         process.PAcollisionEventSelection *
@@ -119,31 +116,7 @@ process.MinBias = cms.Path(process.hltSingleTrigger *
                         process.EcalFlowNtpMinBias
                         )
 
-process.Track12 = cms.Path(process.hltTrack12 *
-                        process.PAcollisionEventSelection *
-                        process.siPixelRecHits *
-                        process.pileupVertexFilterCutGplus *
-                        process.pACentrality *
-                        process.EcalFlowNtpTrack12
-                        )
-
-process.Track20 = cms.Path(process.hltTrack20 *
-                        process.PAcollisionEventSelection *
-                        process.siPixelRecHits *
-                        process.pileupVertexFilterCutGplus *
-                        process.pACentrality *
-                        process.EcalFlowNtpTrack20
-                        )
-
-process.Track30 = cms.Path(process.hltTrack30 *
-                        process.PAcollisionEventSelection *
-                        process.siPixelRecHits *
-                        process.pileupVertexFilterCutGplus *
-                        process.pACentrality *
-                        process.EcalFlowNtpTrack30
-                        )
-
-process.schedule = cms.Schedule(process.MinBias,process.Track12,process.Track20,process.Track30)
+#process.schedule = cms.Schedule(process.MinBias)
 
 process.source = cms.Source("PoolSource",
                             fileNames = cms.untracked.vstring(
