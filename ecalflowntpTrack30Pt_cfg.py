@@ -48,11 +48,11 @@ process.hltTrack12.HLTPaths = ["HLT_PAFullTrack12_v1",
 
 process.hltTrack20 = process.hltHighLevel.clone()
 process.hltTrack20.HLTPaths = ["HLT_PAFullTrack20_v1",
-                               "HLT_PAFullTrack20_v1"]
+                               "HLT_PAFullTrack20_v2"]
 
 process.hltTrack30 = process.hltHighLevel.clone()
 process.hltTrack30.HLTPaths = ["HLT_PAFullTrack30_v1",
-                               "HLT_PAFullTrack30_v1"]
+                               "HLT_PAFullTrack30_v2"]
 
 process.hltTrack12.andOr = cms.bool(True)
 process.hltTrack12.throw = cms.bool(False)
@@ -115,7 +115,7 @@ process.EcalFlowNtpTrack20 = process.EcalFlowNtp.clone(
         )
 process.EcalFlowNtpTrack30 = process.EcalFlowNtp.clone(
         leadingTrackPtMin = cms.double(32),
-        leadingTrackPtMax = cms.double(100)
+        leadingTrackPtMax = cms.double(999)
         )
 
 process.Track12 = cms.Path(process.hltTrack12 *
