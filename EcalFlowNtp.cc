@@ -150,6 +150,9 @@ EcalFlowNtp::EcalFlowNtp(const edm::ParameterSet& ps) :
   cutByLeadingTrackPt_ = ps.getParameter<bool>("cutByLeadingTrackPt");
   leadingTrackPtMin_ = ps.getParameter<double>("leadingTrackPtMin");
   leadingTrackPtMax_ = ps.getParameter<double>("leadingTrackPtMax");
+  cutByLeadingPhotonPt_ = ps.getParameter<bool>("cutByLeadingPhotonPt");
+  leadingPhotonPtMin_ = ps.getParameter<double>("leadingPhotonPtMin");
+  leadingPhotonPtMax_ = ps.getParameter<double>("leadingPhotonPtMax");
   swissThreshold_ = ps.getParameter<double>("swissThreshold");
   timeThreshold_ = ps.getParameter<double>("timeThreshold");
   avoidIeta85_ = ps.getParameter<double>("avoidIeta85");
@@ -277,10 +280,8 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
   iSetup.get<CaloTopologyRecord>().get(theCaloTopology);
   
   edm::Handle<EcalRecHitCollection> rhEBpi0;
-  edm::Handle<EcalRecHitCollection> rhEBeta;
   
   iEvent.getByLabel(productMonitoredEBpi0_, rhEBpi0); 
-  iEvent.getByLabel(productMonitoredEBeta_, rhEBeta);
   
   // Initialize the Position Calc
   const CaloSubdetectorGeometry *geometry_p; 
@@ -329,7 +330,6 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
   nCry = 0;
   nClu = 0;
   
-  if (rhEBpi0.isValid() && (rhEBpi0->size() > 0)){
     
     Handle<std::vector<reco::Vertex> > vertexCollectionSelected;
     iEvent.getByLabel(vertexSrc_,vertexCollectionSelected);
@@ -379,6 +379,25 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	if( leadingTrackPt > leadingTrackPtMax_ ) return;
       }
     //////////////////////////////////////////////////////////
+
+    ////////////// Particle Flow Objects ////////////////////
+    edm::Handle<reco::PFCandidateCollection> pfCandidates;   
+    iEvent.getByLabel(particleFlow_, pfCandidates);
+
+    for( unsigned ic1=0; ic1<pfCandidates->size(); ic1++ ) {
+
+      const reco::PFCandidate& cand = (*pfCandidates)[ic1];
+     
+      if(cand.particleId() != PFCandidate::gamma) continue;
+      float _pfpt = cand.pt();
+      if(_pfpt < 0.4) continue;
+      if(fabs(cand.eta()) > 1.5) continue;
+
+      PFPhotonPt->Fill(_pfpt);
+      }
+
+    /////////////////////////////////////////////////////////
+
     
     for( const auto & vi :  vsorted )
       {
@@ -491,23 +510,6 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
     tEtvsHPHiTracksMinus_->Fill(tHighPurityTracks_, etHFtowerSumMinus_);
     /////////////////////////////////////////////////////////
 
-    ////////////// Particle Flow Objects ////////////////////
-    edm::Handle<reco::PFCandidateCollection> pfCandidates;   
-    iEvent.getByLabel(particleFlow_, pfCandidates);
-
-    for( unsigned ic1=0; ic1<pfCandidates->size(); ic1++ ) {
-
-      const reco::PFCandidate& cand = (*pfCandidates)[ic1];
-     
-      if(cand.particleId() != PFCandidate::gamma) continue;
-      float _pfpt = cand.pt();
-      if(_pfpt < 0.4) continue;
-      if(fabs(cand.eta()) > 1.5) continue;
-
-      PFPhotonPt->Fill(_pfpt);
-      }
-
-    /////////////////////////////////////////////////////////
     
     //Read collection
     
@@ -523,878 +525,906 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
     const EcalRecHitCollection *hitCollection_p = rhEBpi0.product();
     float etot =0;
     EcalRecHitCollection::const_iterator itb;
-    
-    double rhEt;
-    for(itb=rhEBpi0->begin(); itb!=rhEBpi0->end(); ++itb){
 
-      ////////////// Applying the swiss-cross and timing cuts/////
-      //      const GlobalPoint &position = caloGeom->getPosition(itb->id());
-      //      rhEt = itb->energy()/cosh(position.eta()); // Not using at the moment 
-      double  swissCrx = EcalTools::swissCross  (itb->id(), *hitCollection_p, 0., avoidIeta85_);
-      SwissCrossCut->Fill(swissCrx);
-      Timing->Fill(abs(itb->time()));
+    if (rhEBpi0.isValid() && (rhEBpi0->size() > 0)){
       
-      if(    (swissCrx > swissThreshold_)     ||     ( abs(itb->time()) > timeThreshold_) ) continue;
-
-      ////////////////////////////////////////////////////////////
+      double rhEt;
+      for(itb=rhEBpi0->begin(); itb!=rhEBpi0->end(); ++itb){
+	
+	////////////// Applying the swiss-cross and timing cuts/////
+	//      const GlobalPoint &position = caloGeom->getPosition(itb->id());
+	//      rhEt = itb->energy()/cosh(position.eta()); // Not using at the moment 
+	double  swissCrx = EcalTools::swissCross  (itb->id(), *hitCollection_p, 0., avoidIeta85_);
+	SwissCrossCut->Fill(swissCrx);
+	Timing->Fill(abs(itb->time()));
+	
+	if(    (swissCrx > swissThreshold_)     ||     ( abs(itb->time()) > timeThreshold_) ) continue;
+	
+	////////////////////////////////////////////////////////////
+	
+	EBDetId id(itb->id());
+	double energy = itb->energy();
+	if( energy < seleXtalMinEnergy_) continue; 
+	
+	EBDetId det = itb->id();
+	
+	detIdEBRecHits.push_back(det);
+	EBRecHits.push_back(*itb);	  
+	if ( energy > clusSeedThr_ ) seeds.push_back(*itb);
+	
+	//htimeEB_->Fill(itb->time());	  
+	etot+= itb->energy();	 
+	
+      } // Eb rechits
       
-      EBDetId id(itb->id());
-      double energy = itb->energy();
-      if( energy < seleXtalMinEnergy_) continue; 
+      iso = 0;
       
-      EBDetId det = itb->id();
+      // Make own simple clusters (3x3, 5x5 or clusPhiSize_ x clusEtaSize_)
+      sort(seeds.begin(), seeds.end(), ecalRecHitLess());
       
-      detIdEBRecHits.push_back(det);
-      EBRecHits.push_back(*itb);	  
-      if ( energy > clusSeedThr_ ) seeds.push_back(*itb);
+      //int seedcount(0);
       
-      //htimeEB_->Fill(itb->time());	  
-      etot+= itb->energy();	 
-      
-    } // Eb rechits
-    
-    iso = 0;
-    
-    // Make own simple clusters (3x3, 5x5 or clusPhiSize_ x clusEtaSize_)
-    sort(seeds.begin(), seeds.end(), ecalRecHitLess());
-    
-    //int seedcount(0);
-    
-    for (std::vector<EcalRecHit>::iterator itseed=seeds.begin(); itseed!=seeds.end(); itseed++) {
-      EBDetId seed_id = itseed->id();
-      std::vector<EBDetId>::const_iterator usedIds;
-      
-      int nCryinclu(0);
-      bool seedAlreadyUsed=false;
-      for(usedIds=usedXtals.begin(); usedIds!=usedXtals.end(); usedIds++){
-	if(*usedIds==seed_id){
-	  seedAlreadyUsed=true;
-	  //cout<< " Seed with energy "<<itseed->energy()<<" was used !"<<endl;
-	  break; 
-	}
-      }
-      if(nClu>=NCLUMAX) continue;
-      if(nCry>=NCRYMAX) continue;
-      //       seedcount++;
-      if(seedAlreadyUsed)continue;
-      std::vector<DetId> clus_v = topology_p->getWindow(seed_id,clusEtaSize_,clusPhiSize_);       
-      std::vector<std::pair<DetId,float> > clus_used;
-      //Reject the seed if not able to build the cluster around it correctly
-      //if(clus_v.size() < clusEtaSize_*clusPhiSize_){cout<<" Not enough RecHits "<<endl; continue;}
-      vector<EcalRecHit> RecHitsInWindow;
-      vector<EcalRecHit> RecHitsInWindow5x5;
-      
-      double simple_energy = 0;
-      
-      for (std::vector<DetId >::iterator det=clus_v.begin(); det!=clus_v.end(); det++) {
-	EBDetId EBdet = *det;
-	//      cout<<" det "<< EBdet<<" ieta "<<EBdet.ieta()<<" iphi "<<EBdet.iphi()<<endl;
-	bool  HitAlreadyUsed=false;
+      for (std::vector<EcalRecHit>::iterator itseed=seeds.begin(); itseed!=seeds.end(); itseed++) {
+	EBDetId seed_id = itseed->id();
+	std::vector<EBDetId>::const_iterator usedIds;
+	
+	int nCryinclu(0);
+	bool seedAlreadyUsed=false;
 	for(usedIds=usedXtals.begin(); usedIds!=usedXtals.end(); usedIds++){
-	  if(*usedIds==*det){
-	    HitAlreadyUsed=true;
-	    break;
+	  if(*usedIds==seed_id){
+	    seedAlreadyUsed=true;
+	    //cout<< " Seed with energy "<<itseed->energy()<<" was used !"<<endl;
+	    break; 
 	  }
 	}
-	if(HitAlreadyUsed)continue;
+	if(nClu>=NCLUMAX) continue;
+	if(nCry>=NCRYMAX) continue;
+	//       seedcount++;
+	if(seedAlreadyUsed)continue;
+	std::vector<DetId> clus_v = topology_p->getWindow(seed_id,clusEtaSize_,clusPhiSize_);       
+	std::vector<std::pair<DetId,float> > clus_used;
+	//Reject the seed if not able to build the cluster around it correctly
+	//if(clus_v.size() < clusEtaSize_*clusPhiSize_){cout<<" Not enough RecHits "<<endl; continue;}
+	vector<EcalRecHit> RecHitsInWindow;
+	vector<EcalRecHit> RecHitsInWindow5x5;
 	
-	std::vector<EBDetId>::iterator itdet = find( detIdEBRecHits.begin(),detIdEBRecHits.end(),EBdet);
-	if(itdet == detIdEBRecHits.end()) continue; 
+	double simple_energy = 0;
 	
-	int nn = int(itdet - detIdEBRecHits.begin());
-	usedXtals.push_back(*det);
-	RecHitsInWindow.push_back(EBRecHits[nn]);
-	clus_used.push_back(std::make_pair(*det,1));
-	simple_energy = simple_energy + EBRecHits[nn].energy();
-	
-      }
-      
-      if(simple_energy <= 0) continue;
-      
-      math::XYZPoint clus_pos = posCalculator_.Calculate_Location(clus_used,hitCollection_p,geometry_p,geometryES_p);
-      
-      float theta_s = 2. * atan(exp(-clus_pos.eta()));
-      
-      // eta correction according to Z
-      double etaForZEqualsZero = clus_pos.eta();  // initial eta value of cluster without correcting for event Z-vertex;
-      double zCorrectedEta = etaForZEqualsZero; // placeholder for correction result
-      double zAtECal = 0.0;
-      double thetaForZEqualsZero = -1000.0;
-      if(etaForZEqualsZero != 0.0) {
-	thetaForZEqualsZero = 2.0*atan(exp(-etaForZEqualsZero));
-	zAtECal = rECal/tan(thetaForZEqualsZero);
-      } // check for non-zero value of uncorrected eta
-      
-      //
-      // Correction for zVertex using the zVertexEventSelected value
-      //
-      double zCorrected = zAtECal - 0.01*zVertexEventSelected;  // convert to meters
-      double thetaCorrected = -1000.0;
-      if(zCorrected != 0.0) {
-	
-	thetaCorrected = atan(rECal/zCorrected);
-	if(thetaCorrected < 0.0)
-	  thetaCorrected += TMath::Pi();  // convert to 0 to pi range for theta
-	
-	theta_s = thetaCorrected;  // corrected value of theta
-	
-	zCorrectedEta = -log(tan(thetaCorrected/2.0));
-      }
-      else {
-	zCorrectedEta = 0.0;
-      } // check for non-zero value of Z baseline
-      
-      if(iPrintEtaCorrection < nPrintEtaCorrection) {
-	cout << "\n First pass: zVertexEventSelected = " << 0.01*zVertexEventSelected;  // convert to meters
-	cout << ", zAtECal = " << zAtECal;
-	cout << ", zCorrected = " << zCorrected;
-	cout << ", thetaForZEqualsZero = " << thetaForZEqualsZero;
-	cout << ", thetaCorrected = " << thetaCorrected;
-	cout << ", zCorrectedEta = " << zCorrectedEta;
-	cout << ", uncorrected Eta = " << etaForZEqualsZero;
-	
-	iPrintEtaCorrection++;
-	if(iPrintEtaCorrection >= nPrintEtaCorrection)
-	  cout << endl;
-	
-      }
-      
-      float et_s = simple_energy * sin(theta_s);
-      
-      float s4s9_tmp[4];
-      for(int i=0;i<4;i++)s4s9_tmp[i]= 0;
-      
-      int seed_ieta = seed_id.ieta();
-      int seed_iphi = seed_id.iphi();
-      
-      convxtalid( seed_iphi,seed_ieta);
-      
-      // Getting rid of hot channels 
-      // for ECAL barrel this method converts the iphi index range to 0 -> 359, and the ieta range to -85 -> -1 (negative eta) or 0 -> 84 (positive eta)      
-      if((seed_ieta == -75 && seed_iphi == 199) ||
-         (seed_ieta ==  67 && seed_iphi == 74)) {
-        hotChannelSeedsDiscarded++;
-        continue;
-      }
-      
-      float e3x3 = 0; 
-      float e5x5 = 0;
-      double e4_e1 = 0;
-      double Swiss_cross;
-
-      for(unsigned int j=0; j<RecHitsInWindow.size();j++){
-	EBDetId det = (EBDetId)RecHitsInWindow[j].id(); 
-	
-	int ieta = det.ieta();
-	int iphi = det.iphi();
-	
-	convxtalid(iphi,ieta);
-	
-	//Getting rid of the hot channel	
-	if((ieta == -75 && iphi == 199) ||
-           (ieta ==  67 && iphi == 74)) {
-          hotChannelSatellitesDiscarded++;
-          continue;
-        }
-	
-	float en = RecHitsInWindow[j].energy(); 
-	
-	int dx = diff_neta_s(seed_ieta,ieta);
-	int dy = diff_nphi_s(seed_iphi,iphi);//
-
-	double eRight = 0;
-	double eTop = 0;
-	double eLeft = 0;
-	double eBottom = 0; 	
-	/////////// adding swiss-cross cut ////
-
-	if(dx == 1) eRight =  en;
-	if(dy == 1) eTop =  en;
-	if(dy == -1) eLeft =  en;
-	if(dx == -1) eBottom =  en;
-
-	e4_e1 += (eRight + eTop + eLeft + eBottom);
-	Swiss_cross = 1 - e4_e1;
-
-	//	if(Swiss_cross > 0.87) continue;	//Not applying the swiss-cross cut
-	///////////////////////////////////////
-	if(abs(dx)<=1 && abs(dy)<=1) {
-	  e3x3 += en; 
-	  if(dx <= 0 && dy <=0) s4s9_tmp[0] += en; 
-	  if(dx >= 0 && dy <=0) s4s9_tmp[1] += en; 
-	  if(dx <= 0 && dy >=0) s4s9_tmp[2] += en; 
-	  if(dx >= 0 && dy >=0) s4s9_tmp[3] += en; 
-	  if(nCry>=NCRYMAX) continue;
-	  eCry[nCry] = RecHitsInWindow[j].energy();
-	  ptCry[nCry] =  RecHitsInWindow[j].energy() * sin(2. * atan(exp(-geometry_p->getGeometry(det)->getPosition().eta())));
-	  timeCry[nCry] = RecHitsInWindow[j].time();
-	  flagCry[nCry] = RecHitsInWindow[j].recoFlag();
-	  ietaCry[nCry] = ieta;
-	  iphiCry[nCry] = iphi;
-	  iCry[nCry] = det.ic();
-	  iSM[nCry] = det.ism();
-	  etaCry[nCry] = geometry_p->getGeometry(det)->getPosition().eta();
-	  phiCry[nCry] = geometry_p->getGeometry(det)->getPosition().phi();
-	  indexCryClu[nClu][nCryinclu] = nCry;
-	  if(dx == 0 && dy == 0)  {
-	    S1Clu[nClu] = RecHitsInWindow[j].energy();
-	    timeClu[nClu] = RecHitsInWindow[j].time();
-	  }
-	  nCryinclu++;
-	  nCry++;      
-	}//
-      }
-      
-      if(e3x3 <= 0) continue;
-      
-      float s4s9_max = *max_element( s4s9_tmp,s4s9_tmp+4)/e3x3; 
-      
-      //calculate e5x5
-      std::vector<DetId> clus_v5x5 = topology_p->getWindow(seed_id,5,5); 
-      for( std::vector<DetId>::const_iterator idItr = clus_v5x5.begin(); idItr != clus_v5x5.end(); idItr++){
-	EBDetId det = *idItr;
-	
-	//inside collections
-	std::vector<EBDetId>::iterator itdet = find( detIdEBRecHits.begin(),detIdEBRecHits.end(),det);
-	if(itdet == detIdEBRecHits.end()) continue; 
-	
-	int nn = int(itdet - detIdEBRecHits.begin());
-	
-	RecHitsInWindow5x5.push_back(EBRecHits[nn]);
-	e5x5 += EBRecHits[nn].energy();
-      }
-      
-      if(e5x5 <= 0) continue;
-      
-      RecHitsCluster.push_back(RecHitsInWindow);
-      RecHitsCluster5x5.push_back(RecHitsInWindow5x5);
-      
-      S9Clu[nClu] = e3x3;
-      ptClu[nClu] =  et_s;
-      // etaClu[nClu] = clus_pos.eta();
-      etaClu[nClu] = zCorrectedEta;
-      phiClu[nClu] = clus_pos.phi();
-      S4Clu[nClu] =  s4s9_max * simple_energy;
-      S25Clu[nClu] = e5x5;
-      nCryClu[nClu] = nCryinclu;
-
-      if(doEnergyRecalibration_) {
-
-        if(nCryinclu < 1 || nCryinclu > 9) {
-          cerr << "\n\n Programming error with nCryinclu = " << nCryinclu << endl;
-          return;
-        }
-        float totalCorrection = crystalCorrectionFunction(nCryinclu - 1, e3x3);
-
-        e3x3 *= totalCorrection;
-        et_s *= totalCorrection;
-
-        S9Clu[nClu] = e3x3;
-        ptClu[nClu] =  et_s;
-
-        S4Clu[nClu] *= totalCorrection;
-	e5x5 *= totalCorrection;
-        S25Clu[nClu] = e5x5;
-
-      } // check for doing energy re-calibration
-      nClu++;
-      
-    } // loop over seeds
-    
-  }            // rhEBpi0.valid() ends
-  
-  
-  if(nClu > maxClustersPerJob) {
-    maxClustersPerJob = nClu;
-    eventMaxClustersPerJob = thisEvent;
-    runMaxClustersPerJob = thisJob;
-  }
-  
-  if(nCry > maxCryPerJob) {
-    maxCryPerJob = nCry;
-    eventMaxCryPerJob = thisEvent;
-    runMaxCryPerJob = thisJob;
-  }
-  
-  for(int kCluster=0; kCluster<nClu; kCluster++) {
-    
-    float clustrEnr = S9Clu[kCluster];
-    float clustrPt = ptClu[kCluster];
-    float clustrS49 = S4Clu[kCluster]/clustrEnr;
-    float clustrS1 = S1Clu[kCluster];
-    float clustrEta = etaClu[kCluster];
-    float clustrS25 = S25Clu[kCluster];
-    
-    // These cuts are used as the global cuts below for the pi0 mass histograms
-
-    if(clustrEnr > clustEnrCut && clustrPt > clustPtCut &&
-       clustrS49 > clustS49Cut && clustrS1 > clustS1Cut &&
-       fabs(clustrEta) < 1.49 && (fabs(1.0 - clustrS25/clustrEnr) < clustS25Cut)) {
-      
-      if(currentAcceptedClusterNumber >= maximumNumberAcceptedCluster) {
-	cerr << "\n currentAcceptedClusterNumber is too large " << currentAcceptedClusterNumber << endl;
-	return;
-      } // safety check on too many clusters
-      
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].thisEvent = thisEvent;
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].kCluster = kCluster;
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustEta = clustrEta;
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustPhi = phiClu[kCluster];
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustPt = clustrPt;
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustEnr = clustrEnr;
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustS49 = clustrS49;
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustS25 = clustrS25;
-      acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].hfAllAngle = HFAngle;
-
-      PhotonClusterPt->Fill(clustrPt);      
-
-      currentAcceptedClusterNumber++;
-      
-      if(currentAcceptedClusterNumber > maximumClustersInSingleEvent)
-	maximumClustersInSingleEvent = currentAcceptedClusterNumber;
-      
-    } // check for good cluster
-    
-  } // loop over good clusters=======================end loop filling array with current clusters=========================
-  
-  if(currentAcceptedClusterNumber >= minimumClustersPerEvent) {
-    totalEventsWithClusters++;
-    countAcceptedCluster[currentBufferEventIndexCluster] = currentAcceptedClusterNumber; // clusters accepted in the current event
-    
-    // Calculate same-event and mixed-event mass spectra
-    
-    for(int jCluster1=0; jCluster1<currentAcceptedClusterNumber; jCluster1++) {//=====loop over clusters in current event====
-      
-      Long64_t currentEvent = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].thisEvent;
-      
-      float ptCluster1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].clustPt;
-      float etaCluster1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].clustEta;
-      float phiCluster1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].clustPhi;
-      float enrCluster1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].clustEnr;
-      
-      float p1x = ptCluster1*cos(phiCluster1);
-      float p1y = ptCluster1*sin(phiCluster1);
-      float p1z = enrCluster1*cos(2.0*atan(exp(-etaCluster1)));
-      
-      double clust1Theta = 2.0*atan(exp(-etaCluster1));
-      
-      float xCluster1 = rECal*cos(phiCluster1);
-      float yCluster1 = rECal*sin(phiCluster1);
-      float zCluster1 = rECal/tan(clust1Theta);
-      
-      for(int kBuffer=0; kBuffer<bufferDepth; kBuffer++) {//=======Loop over OTHER events====================
-	bool sameEventCheck = false;
-	if(currentEvent == eventNumberCluster[kBuffer]) {
-	  sameEventCheck = true;
-	}
-	
-	int previousAcceptedNumber = countAcceptedCluster[kBuffer];
-	if(sameEventCheck && currentAcceptedClusterNumber != previousAcceptedNumber) {
-	  cerr << "\n Programming error, same event cluster numbers are not the same";
-	  cerr << ";  currentAcceptedClusterNumber " << currentAcceptedClusterNumber;
-	  cerr << ",  previousAcceptedNumber " << previousAcceptedNumber;
-	  cerr << ",  currentEvent = " << currentEvent;
-	  cerr << endl;
-	  return;
-	}
-	
-	for(int jCluster2=0; jCluster2<previousAcceptedNumber; jCluster2++) {//=============loop over clusters in kbuffer==
-	  
-	  Long64_t previousEvent = acceptedClusterInformationArray[kBuffer][jCluster2].thisEvent;
-	  if(previousEvent == currentEvent && !sameEventCheck) {
-	    cerr << "\n Programming error: trying to mix clusters with the same event number " << currentEvent;
-	    cerr << ",  kBuffer = " << kBuffer << ", clusters in previous event " << previousAcceptedNumber;
-	    for(unsigned int jBuffer=0; jBuffer<bufferDepth; jBuffer++) {
-	      cout << "\n jBuffer " << jBuffer << ",  eventNumber " << eventNumberCluster[jBuffer];
-	      cout << ", clusters in event " << countAcceptedCluster[jBuffer];
+	for (std::vector<DetId >::iterator det=clus_v.begin(); det!=clus_v.end(); det++) {
+	  EBDetId EBdet = *det;
+	  //      cout<<" det "<< EBdet<<" ieta "<<EBdet.ieta()<<" iphi "<<EBdet.iphi()<<endl;
+	  bool  HitAlreadyUsed=false;
+	  for(usedIds=usedXtals.begin(); usedIds!=usedXtals.end(); usedIds++){
+	    if(*usedIds==*det){
+	      HitAlreadyUsed=true;
+	      break;
 	    }
+	  }
+	  if(HitAlreadyUsed)continue;
+	  
+	  std::vector<EBDetId>::iterator itdet = find( detIdEBRecHits.begin(),detIdEBRecHits.end(),EBdet);
+	  if(itdet == detIdEBRecHits.end()) continue; 
+	  
+	  int nn = int(itdet - detIdEBRecHits.begin());
+	  usedXtals.push_back(*det);
+	  RecHitsInWindow.push_back(EBRecHits[nn]);
+	  clus_used.push_back(std::make_pair(*det,1));
+	  simple_energy = simple_energy + EBRecHits[nn].energy();
+	  
+	}
+	
+	if(simple_energy <= 0) continue;
+	
+	math::XYZPoint clus_pos = posCalculator_.Calculate_Location(clus_used,hitCollection_p,geometry_p,geometryES_p);
+	
+	float theta_s = 2. * atan(exp(-clus_pos.eta()));
+	
+	// eta correction according to Z
+	double etaForZEqualsZero = clus_pos.eta();  // initial eta value of cluster without correcting for event Z-vertex;
+	double zCorrectedEta = etaForZEqualsZero; // placeholder for correction result
+	double zAtECal = 0.0;
+	double thetaForZEqualsZero = -1000.0;
+	if(etaForZEqualsZero != 0.0) {
+	  thetaForZEqualsZero = 2.0*atan(exp(-etaForZEqualsZero));
+	  zAtECal = rECal/tan(thetaForZEqualsZero);
+	} // check for non-zero value of uncorrected eta
+	
+	//
+	// Correction for zVertex using the zVertexEventSelected value
+	//
+	double zCorrected = zAtECal - 0.01*zVertexEventSelected;  // convert to meters
+	double thetaCorrected = -1000.0;
+	if(zCorrected != 0.0) {
+	  
+	  thetaCorrected = atan(rECal/zCorrected);
+	  if(thetaCorrected < 0.0)
+	    thetaCorrected += TMath::Pi();  // convert to 0 to pi range for theta
+	  
+	  theta_s = thetaCorrected;  // corrected value of theta
+	  
+	  zCorrectedEta = -log(tan(thetaCorrected/2.0));
+	}
+	else {
+	  zCorrectedEta = 0.0;
+	} // check for non-zero value of Z baseline
+	
+	if(iPrintEtaCorrection < nPrintEtaCorrection) {
+	  cout << "\n First pass: zVertexEventSelected = " << 0.01*zVertexEventSelected;  // convert to meters
+	  cout << ", zAtECal = " << zAtECal;
+	  cout << ", zCorrected = " << zCorrected;
+	  cout << ", thetaForZEqualsZero = " << thetaForZEqualsZero;
+	  cout << ", thetaCorrected = " << thetaCorrected;
+	  cout << ", zCorrectedEta = " << zCorrectedEta;
+	  cout << ", uncorrected Eta = " << etaForZEqualsZero;
+	  
+	  iPrintEtaCorrection++;
+	  if(iPrintEtaCorrection >= nPrintEtaCorrection)
+	    cout << endl;
+	  
+	}
+	
+	float et_s = simple_energy * sin(theta_s);
+	
+	float s4s9_tmp[4];
+	for(int i=0;i<4;i++)s4s9_tmp[i]= 0;
+	
+	int seed_ieta = seed_id.ieta();
+	int seed_iphi = seed_id.iphi();
+	
+	convxtalid( seed_iphi,seed_ieta);
+	
+	// Getting rid of hot channels 
+	// for ECAL barrel this method converts the iphi index range to 0 -> 359, and the ieta range to -85 -> -1 (negative eta) or 0 -> 84 (positive eta)      
+	if((seed_ieta == -75 && seed_iphi == 199) ||
+	   (seed_ieta ==  67 && seed_iphi == 74)) {
+	  hotChannelSeedsDiscarded++;
+	  continue;
+	}
+	
+	float e3x3 = 0; 
+	float e5x5 = 0;
+	double e4_e1 = 0;
+	double Swiss_cross;
+	
+	for(unsigned int j=0; j<RecHitsInWindow.size();j++){
+	  EBDetId det = (EBDetId)RecHitsInWindow[j].id(); 
+	  
+	  int ieta = det.ieta();
+	  int iphi = det.iphi();
+	  
+	  convxtalid(iphi,ieta);
+	  
+	  //Getting rid of the hot channel	
+	  if((ieta == -75 && iphi == 199) ||
+	     (ieta ==  67 && iphi == 74)) {
+	    hotChannelSatellitesDiscarded++;
+	    continue;
+	  }
+	  
+	  float en = RecHitsInWindow[j].energy(); 
+	  
+	  int dx = diff_neta_s(seed_ieta,ieta);
+	  int dy = diff_nphi_s(seed_iphi,iphi);//
+	  
+	  double eRight = 0;
+	  double eTop = 0;
+	  double eLeft = 0;
+	  double eBottom = 0; 	
+	  /////////// adding swiss-cross cut ////
+	  
+	  if(dx == 1) eRight =  en;
+	  if(dy == 1) eTop =  en;
+	  if(dy == -1) eLeft =  en;
+	  if(dx == -1) eBottom =  en;
+	  
+	  e4_e1 += (eRight + eTop + eLeft + eBottom);
+	  Swiss_cross = 1 - e4_e1;
+	  
+	  //	if(Swiss_cross > 0.87) continue;	//Not applying the swiss-cross cut
+	  ///////////////////////////////////////
+	  if(abs(dx)<=1 && abs(dy)<=1) {
+	    e3x3 += en; 
+	    if(dx <= 0 && dy <=0) s4s9_tmp[0] += en; 
+	    if(dx >= 0 && dy <=0) s4s9_tmp[1] += en; 
+	    if(dx <= 0 && dy >=0) s4s9_tmp[2] += en; 
+	    if(dx >= 0 && dy >=0) s4s9_tmp[3] += en; 
+	    if(nCry>=NCRYMAX) continue;
+	    eCry[nCry] = RecHitsInWindow[j].energy();
+	    ptCry[nCry] =  RecHitsInWindow[j].energy() * sin(2. * atan(exp(-geometry_p->getGeometry(det)->getPosition().eta())));
+	    timeCry[nCry] = RecHitsInWindow[j].time();
+	    flagCry[nCry] = RecHitsInWindow[j].recoFlag();
+	    ietaCry[nCry] = ieta;
+	    iphiCry[nCry] = iphi;
+	    iCry[nCry] = det.ic();
+	    iSM[nCry] = det.ism();
+	    etaCry[nCry] = geometry_p->getGeometry(det)->getPosition().eta();
+	    phiCry[nCry] = geometry_p->getGeometry(det)->getPosition().phi();
+	    indexCryClu[nClu][nCryinclu] = nCry;
+	    if(dx == 0 && dy == 0)  {
+	      S1Clu[nClu] = RecHitsInWindow[j].energy();
+	      timeClu[nClu] = RecHitsInWindow[j].time();
+	    }
+	    nCryinclu++;
+	    nCry++;      
+	  }//
+	}
+	
+	if(e3x3 <= 0) continue;
+	
+	float s4s9_max = *max_element( s4s9_tmp,s4s9_tmp+4)/e3x3; 
+	
+	//calculate e5x5
+	std::vector<DetId> clus_v5x5 = topology_p->getWindow(seed_id,5,5); 
+	for( std::vector<DetId>::const_iterator idItr = clus_v5x5.begin(); idItr != clus_v5x5.end(); idItr++){
+	  EBDetId det = *idItr;
+	  
+	  //inside collections
+	  std::vector<EBDetId>::iterator itdet = find( detIdEBRecHits.begin(),detIdEBRecHits.end(),det);
+	  if(itdet == detIdEBRecHits.end()) continue; 
+	  
+	  int nn = int(itdet - detIdEBRecHits.begin());
+	  
+	  RecHitsInWindow5x5.push_back(EBRecHits[nn]);
+	  e5x5 += EBRecHits[nn].energy();
+	}
+	
+	if(e5x5 <= 0) continue;
+	
+	RecHitsCluster.push_back(RecHitsInWindow);
+	RecHitsCluster5x5.push_back(RecHitsInWindow5x5);
+	
+	S9Clu[nClu] = e3x3;
+	ptClu[nClu] =  et_s;
+	// etaClu[nClu] = clus_pos.eta();
+	etaClu[nClu] = zCorrectedEta;
+	phiClu[nClu] = clus_pos.phi();
+	S4Clu[nClu] =  s4s9_max * simple_energy;
+	S25Clu[nClu] = e5x5;
+	nCryClu[nClu] = nCryinclu;
+	
+	if(doEnergyRecalibration_) {
+	  
+	  if(nCryinclu < 1 || nCryinclu > 9) {
+	    cerr << "\n\n Programming error with nCryinclu = " << nCryinclu << endl;
+	    return;
+	  }
+	  float totalCorrection = crystalCorrectionFunction(nCryinclu - 1, e3x3);
+	  
+	  e3x3 *= totalCorrection;
+	  et_s *= totalCorrection;
+	  
+	  S9Clu[nClu] = e3x3;
+	  ptClu[nClu] =  et_s;
+	  
+	  S4Clu[nClu] *= totalCorrection;
+	  e5x5 *= totalCorrection;
+	  S25Clu[nClu] = e5x5;
+	  
+	} // check for doing energy re-calibration
+	nClu++;
+	
+      } // loop over seeds
+      
+    }            // rhEBpi0.valid() ends
+    
+    
+    if(nClu > maxClustersPerJob) {
+      maxClustersPerJob = nClu;
+      eventMaxClustersPerJob = thisEvent;
+      runMaxClustersPerJob = thisJob;
+    }
+    
+    if(nCry > maxCryPerJob) {
+      maxCryPerJob = nCry;
+      eventMaxCryPerJob = thisEvent;
+      runMaxCryPerJob = thisJob;
+    }
+
+
+    ///////////// For selecting events based on leading photon pt 
+    double leadingPhotonPt = 0.0;
+
+    for(int kCluster=0; kCluster<nClu; kCluster++) {
+
+      float clustrEnr = S9Clu[kCluster];
+      float clustrPt = ptClu[kCluster];
+      float clustrS49 = S4Clu[kCluster]/clustrEnr;
+      float clustrS1 = S1Clu[kCluster];
+      float clustrEta = etaClu[kCluster];
+      float clustrS25 = S25Clu[kCluster];
+
+      if(clustrEnr > clustEnrCut && clustrPt > clustPtCut &&
+         clustrS1 > clustS1Cut &&
+         fabs(clustrEta) < 1.49 && (fabs(1.0 - clustrS25/clustrEnr) < clustS25Cut)) {
+
+        if( clustrPt > leadingPhotonPt ) leadingPhotonPt = clustrPt;
+      }
+    }
+
+    EventsLeadPhotonPt->Fill(leadingPhotonPt);
+
+    if (cutByLeadingPhotonPt_ )
+      {
+        if( leadingPhotonPt < leadingPhotonPtMin_ ) return;
+        if( leadingPhotonPt > leadingPhotonPtMax_ ) return;
+      }
+
+    ////////////////////////////////////////////////////////////////////
+    
+    for(int kCluster=0; kCluster<nClu; kCluster++) {
+      
+      float clustrEnr = S9Clu[kCluster];
+      float clustrPt = ptClu[kCluster];
+      float clustrS49 = S4Clu[kCluster]/clustrEnr;
+      float clustrS1 = S1Clu[kCluster];
+      float clustrEta = etaClu[kCluster];
+      float clustrS25 = S25Clu[kCluster];
+
+      if(clustrEnr > clustEnrCut && clustrPt > clustPtCut &&
+	 clustrS1 > clustS1Cut &&
+	 fabs(clustrEta) < 1.49 && (fabs(1.0 - clustrS25/clustrEnr) < clustS25Cut)) {
+
+	PhotonClusterPt->Fill(clustrPt);      
+	
+      }      
+      // These cuts are used as the global cuts below for the pi0 mass histograms
+      
+      if(clustrEnr > clustEnrCut && clustrPt > clustPtCut &&
+	 clustrS49 > clustS49Cut && clustrS1 > clustS1Cut &&
+	 fabs(clustrEta) < 1.49 && (fabs(1.0 - clustrS25/clustrEnr) < clustS25Cut)) {
+	
+	if(currentAcceptedClusterNumber >= maximumNumberAcceptedCluster) {
+	  cerr << "\n currentAcceptedClusterNumber is too large " << currentAcceptedClusterNumber << endl;
+	  return;
+	} // safety check on too many clusters
+	
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].thisEvent = thisEvent;
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].kCluster = kCluster;
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustEta = clustrEta;
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustPhi = phiClu[kCluster];
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustPt = clustrPt;
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustEnr = clustrEnr;
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustS49 = clustrS49;
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustS25 = clustrS25;
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].hfAllAngle = HFAngle;
+		
+	currentAcceptedClusterNumber++;
+	
+	if(currentAcceptedClusterNumber > maximumClustersInSingleEvent)
+	  maximumClustersInSingleEvent = currentAcceptedClusterNumber;
+	
+      } // check for good cluster
+      
+    } // loop over good clusters=======================end loop filling array with current clusters=========================
+    
+    if(currentAcceptedClusterNumber >= minimumClustersPerEvent) {
+      totalEventsWithClusters++;
+      countAcceptedCluster[currentBufferEventIndexCluster] = currentAcceptedClusterNumber; // clusters accepted in the current event
+      
+      // Calculate same-event and mixed-event mass spectra
+      
+      for(int jCluster1=0; jCluster1<currentAcceptedClusterNumber; jCluster1++) {//=====loop over clusters in current event====
+	
+	Long64_t currentEvent = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].thisEvent;
+	
+	float ptCluster1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].clustPt;
+	float etaCluster1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].clustEta;
+	float phiCluster1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].clustPhi;
+	float enrCluster1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].clustEnr;
+	
+	float p1x = ptCluster1*cos(phiCluster1);
+	float p1y = ptCluster1*sin(phiCluster1);
+	float p1z = enrCluster1*cos(2.0*atan(exp(-etaCluster1)));
+	
+	double clust1Theta = 2.0*atan(exp(-etaCluster1));
+	
+	float xCluster1 = rECal*cos(phiCluster1);
+	float yCluster1 = rECal*sin(phiCluster1);
+	float zCluster1 = rECal/tan(clust1Theta);
+	
+	for(int kBuffer=0; kBuffer<bufferDepth; kBuffer++) {//=======Loop over OTHER events====================
+	  bool sameEventCheck = false;
+	  if(currentEvent == eventNumberCluster[kBuffer]) {
+	    sameEventCheck = true;
+	  }
+	  
+	  int previousAcceptedNumber = countAcceptedCluster[kBuffer];
+	  if(sameEventCheck && currentAcceptedClusterNumber != previousAcceptedNumber) {
+	    cerr << "\n Programming error, same event cluster numbers are not the same";
+	    cerr << ";  currentAcceptedClusterNumber " << currentAcceptedClusterNumber;
+	    cerr << ",  previousAcceptedNumber " << previousAcceptedNumber;
+	    cerr << ",  currentEvent = " << currentEvent;
 	    cerr << endl;
 	    return;
 	  }
 	  
-	  if(sameEventCheck && jCluster2<=jCluster1)
-	    continue;
-	  
-	  if(sameEventCheck)
-	    countSameEvents++;
-	  
-	  countMixedClusterExamined++;
-	  
-	  float ptCluster2 = acceptedClusterInformationArray[kBuffer][jCluster2].clustPt;
-	  float etaCluster2 = acceptedClusterInformationArray[kBuffer][jCluster2].clustEta;
-	  float enrCluster2 = acceptedClusterInformationArray[kBuffer][jCluster2].clustEnr;
-	  float phiCluster2 = acceptedClusterInformationArray[kBuffer][jCluster2].clustPhi;
-	  
-	  float p2x = ptCluster2*cos(phiCluster2);
-	  float p2y = ptCluster2*sin(phiCluster2);
-	  float p2z = enrCluster2*cos(2.0*atan(exp(-etaCluster2)));
-	  double clust2Theta = 2.0*atan(exp(-etaCluster2));
-	  
-	  float pxsum = p1x + p2x;
-	  float pysum = p1y + p2y;
-	  float pi0Pt = sqrt(pxsum*pxsum + pysum*pysum);
-	  
-	  
-	  float pi0Phi = atan2(pysum, pxsum); 
-	  float pzsum = p1z + p2z;
-	  float totalMomentum = sqrt(pi0Pt*pi0Pt + pzsum*pzsum);
-	  float pi0Theta = acos(pzsum/totalMomentum);
-	  float pi0Eta = -log(tan(pi0Theta/2.));
-	  
-	  float xCluster2 = rECal*cos(phiCluster2);
-	  float yCluster2 = rECal*sin(phiCluster2);
-	  float zCluster2 = rECal/tan(clust2Theta);
-	  
-	  float dSeparationSquared = (xCluster2 - xCluster1)*(xCluster2- xCluster1) +
-	    (yCluster2 - yCluster1)*(yCluster2- yCluster1) +
-	    (zCluster2 - zCluster1)*(zCluster2- zCluster1);
-	  
-	  if(dSeparationSquared < minimumSeparationSquared) {
-	    continue;
-	  } // check for passing absolute minimum separation cut
-	  
-	  if(usePtDependentSeparation && pi0Pt > 0.0 ) {
-	    // Parameterization result is in cm, but need meters for checking
-	    double predictedMinimumDistance = 0.01*rescaleSeparationFactor*(aSeparationCoefficient/pi0Pt + bSeparationCoefficient/(pi0Pt*pi0Pt));
-	    if(dSeparationSquared < predictedMinimumDistance*predictedMinimumDistance) {
-	      countSeparationPtCut++;
-	      continue;
-	    } // check for passing pT dependent separation cut
-	  }
-	  
-	  float pi0Energy = enrCluster1 + enrCluster2;
-	  float combinedEventPi0Mass = sqrt(pi0Energy*pi0Energy - totalMomentum*totalMomentum);
-	  
-	  /*	  //added for re-constructing k0-shorts
-	    float k0sEnergy = pi0Energy + pi0Energy;
-	    ////////////////////////
-	    float k0xsum = pxsum + pxsum;
-	    float k0ysum = pysum + pysum;
-	    float k0zsum = pzsum + pzsum;
-	    float k0sPt = sqrt(k0xsum*k0xsum + k0ysum*k0ysum);
-	    float totalk0sMomentum = sqrt(k0sPt*k0sPt + k0zsum*k0zsum);
-	    float combinedEventk0Mass = sqrt(k0sEnergy*k0sEnergy - totalk0sMomentum*totalk0sMomentum);
-	  ////////////////////////*/
-	  
-	  
-	  if(useClusterEnergyAsymmetryCut && combinedEventPi0Mass < maximumPi0MassForHistogram) {  // asymmetry cut for pi0 mass only
-	    float clusterEnergySum = enrCluster2 + enrCluster1;
+	  for(int jCluster2=0; jCluster2<previousAcceptedNumber; jCluster2++) {//=============loop over clusters in kbuffer==
 	    
-	    if(clusterEnergySum <= 0.0) {
-	      cerr << "\n Reconstruction error, cluster energy sum = " << clusterEnergySum;
-	      cerr << "\n  Cluster1 energy = " <<  enrCluster1;
-	      cerr << "\n  Cluster2 energy = " <<  enrCluster2;
+	    Long64_t previousEvent = acceptedClusterInformationArray[kBuffer][jCluster2].thisEvent;
+	    if(previousEvent == currentEvent && !sameEventCheck) {
+	      cerr << "\n Programming error: trying to mix clusters with the same event number " << currentEvent;
+	      cerr << ",  kBuffer = " << kBuffer << ", clusters in previous event " << previousAcceptedNumber;
+	      for(unsigned int jBuffer=0; jBuffer<bufferDepth; jBuffer++) {
+		cout << "\n jBuffer " << jBuffer << ",  eventNumber " << eventNumberCluster[jBuffer];
+		cout << ", clusters in event " << countAcceptedCluster[jBuffer];
+	      }
 	      cerr << endl;
 	      return;
-	    } // safety check on cluster energy sum
-	    float clusterEnergyAsymmetry = fabs(enrCluster2 - enrCluster1)/clusterEnergySum;
-	    if(clusterEnergyAsymmetry >  clusterEnergyAsymmetryCut) {
-	      
-	      continue;  // skip this combination
 	    }
 	    
-	  } // check on using cluster energy asymmetry cut
-	  
-	  
-	  double cosOpenAngle = cos(clust1Theta)*cos(clust2Theta) + sin(clust1Theta)*sin(clust2Theta)*cos(phiCluster2 - phiCluster1);
-	  float openAngle = acos(cosOpenAngle);
-	  
-	  if(combinedEventPi0Mass > 0.0 && combinedEventPi0Mass < maximumPi0MassForHistogram) {
+	    if(sameEventCheck && jCluster2<=jCluster1)
+	      continue;
 	    
-	    // Checks for combinations in the pi0 mass range
+	    if(sameEventCheck)
+	      countSameEvents++;
 	    
-	    bool failOpeningAngleCut = false;
-	    if(useFixedOpeningAngleCut)
-	      failOpeningAngleCut = true;
+	    countMixedClusterExamined++;
 	    
-	    if(useFixedOpeningAngleCut) {
+	    float ptCluster2 = acceptedClusterInformationArray[kBuffer][jCluster2].clustPt;
+	    float etaCluster2 = acceptedClusterInformationArray[kBuffer][jCluster2].clustEta;
+	    float enrCluster2 = acceptedClusterInformationArray[kBuffer][jCluster2].clustEnr;
+	    float phiCluster2 = acceptedClusterInformationArray[kBuffer][jCluster2].clustPhi;
+	    
+	    float p2x = ptCluster2*cos(phiCluster2);
+	    float p2y = ptCluster2*sin(phiCluster2);
+	    float p2z = enrCluster2*cos(2.0*atan(exp(-etaCluster2)));
+	    double clust2Theta = 2.0*atan(exp(-etaCluster2));
+	    
+	    float pxsum = p1x + p2x;
+	    float pysum = p1y + p2y;
+	    float pi0Pt = sqrt(pxsum*pxsum + pysum*pysum);
+	    
+	    
+	    float pi0Phi = atan2(pysum, pxsum); 
+	    float pzsum = p1z + p2z;
+	    float totalMomentum = sqrt(pi0Pt*pi0Pt + pzsum*pzsum);
+	    float pi0Theta = acos(pzsum/totalMomentum);
+	    float pi0Eta = -log(tan(pi0Theta/2.));
+	    
+	    float xCluster2 = rECal*cos(phiCluster2);
+	    float yCluster2 = rECal*sin(phiCluster2);
+	    float zCluster2 = rECal/tan(clust2Theta);
+	    
+	    float dSeparationSquared = (xCluster2 - xCluster1)*(xCluster2- xCluster1) +
+	      (yCluster2 - yCluster1)*(yCluster2- yCluster1) +
+	      (zCluster2 - zCluster1)*(zCluster2- zCluster1);
+	    
+	    if(dSeparationSquared < minimumSeparationSquared) {
+	      continue;
+	    } // check for passing absolute minimum separation cut
+	    
+	    if(usePtDependentSeparation && pi0Pt > 0.0 ) {
+	      // Parameterization result is in cm, but need meters for checking
+	      double predictedMinimumDistance = 0.01*rescaleSeparationFactor*(aSeparationCoefficient/pi0Pt + bSeparationCoefficient/(pi0Pt*pi0Pt));
+	      if(dSeparationSquared < predictedMinimumDistance*predictedMinimumDistance) {
+		countSeparationPtCut++;
+		continue;
+	      } // check for passing pT dependent separation cut
+	    }
+	    
+	    float pi0Energy = enrCluster1 + enrCluster2;
+	    float combinedEventPi0Mass = sqrt(pi0Energy*pi0Energy - totalMomentum*totalMomentum);
+	    
+	    if(useClusterEnergyAsymmetryCut && combinedEventPi0Mass < maximumPi0MassForHistogram) {  // asymmetry cut for pi0 mass only
+	      float clusterEnergySum = enrCluster2 + enrCluster1;
 	      
-	      // opening angle cut according to pT-Dependent parameterization
-	      
-	      float pTDependentOpenAngleCut = aOpenAngleCutParameter/pi0Pt + bOpenAngleCutParameter/(pi0Pt*pi0Pt);
-	      if(openAngle > pTDependentOpenAngleCut)
-		failOpeningAngleCut = false;
-	    } // check on using pT-dependent opening angle parameterization
-	    
-	    if(failOpeningAngleCut) {
-	      continue; // skip this combination
-	    } // check on passing opening angle cut, either same-event or mixed-event
-	    
-	  }// check on being  inside pi0 mass histogram region 
-	  
-	  if(pi0Pt < lowpi0PtCut_ || pi0Pt > highpi0PtCut_)
-	    continue;
-	  if(pi0Eta <= lowEtaLimit || pi0Eta >= highEtaLimit)
-	    continue;
-	  
-	  if(combinedEventPi0Mass > 0.0 && combinedEventPi0Mass < maximumPi0MassForHistogram) {
-	    if(sameEventCheck) {
-	      pi0MassHistSameEvent->Fill(combinedEventPi0Mass);
-	      pi0PhiTrueHist->Fill(pi0Phi);
-	      pi0EtaTrueHist->Fill(pi0Eta);
-	      
-	      char histogramName1[200];
-	      for(int kPt=0; kPt<bins1; kPt++) {
-		if(pi0Pt > NptBins_[kPt] && pi0Pt <= NptBins_[kPt+1])
-		  {
-      		    sprintf(histogramName1, "pi0MassSameEventPtBin%d", kPt);
-		    pi0MassHistSameEventvsPt[histogramName1]->Fill(combinedEventPi0Mass);
-		  }
+	      if(clusterEnergySum <= 0.0) {
+		cerr << "\n Reconstruction error, cluster energy sum = " << clusterEnergySum;
+		cerr << "\n  Cluster1 energy = " <<  enrCluster1;
+		cerr << "\n  Cluster2 energy = " <<  enrCluster2;
+		cerr << endl;
+		return;
+	      } // safety check on cluster energy sum
+	      float clusterEnergyAsymmetry = fabs(enrCluster2 - enrCluster1)/clusterEnergySum;
+	      if(clusterEnergyAsymmetry >  clusterEnergyAsymmetryCut) {
+		
+		continue;  // skip this combination
 	      }
 	      
-	      //     if(combinedEventPi0Mass >=0.11 && combinedEventPi0Mass < 0.17) {
-	      if(combinedEventPi0Mass >=0.19 && combinedEventPi0Mass < 0.24) {
-	      //	      if(combinedEventPi0Mass >=0.24 && combinedEventPi0Mass < 0.28) {
-		//Used to calculate the correlation function from the side-band
-		_pi0Spectrum->Fill(pi0Eta, pi0Pt, occ);
-		pi0PtTrueHist->Fill(pi0Pt);
+	    } // check on using cluster energy asymmetry cut
+	    
+	    
+	    double cosOpenAngle = cos(clust1Theta)*cos(clust2Theta) + sin(clust1Theta)*sin(clust2Theta)*cos(phiCluster2 - phiCluster1);
+	    float openAngle = acos(cosOpenAngle);
+	    
+	    if(combinedEventPi0Mass > 0.0 && combinedEventPi0Mass < maximumPi0MassForHistogram) {
+	      
+	      // Checks for combinations in the pi0 mass range
+	      
+	      bool failOpeningAngleCut = false;
+	      if(useFixedOpeningAngleCut)
+		failOpeningAngleCut = true;
+	      
+	      if(useFixedOpeningAngleCut) {
 		
-		if(pi0HadronCorrelations_) {
-		  TVector3 pvectorPi0;
-		  pvectorPi0.SetPtEtaPhi(pi0Pt,pi0Eta,pi0Phi);
-		  pVect_trg.push_back(pvectorPi0);
+		// opening angle cut according to pT-Dependent parameterization
+		
+		float pTDependentOpenAngleCut = aOpenAngleCutParameter/pi0Pt + bOpenAngleCutParameter/(pi0Pt*pi0Pt);
+		if(openAngle > pTDependentOpenAngleCut)
+		  failOpeningAngleCut = false;
+	      } // check on using pT-dependent opening angle parameterization
+	      
+	      if(failOpeningAngleCut) {
+		continue; // skip this combination
+	      } // check on passing opening angle cut, either same-event or mixed-event
+	      
+	    }// check on being  inside pi0 mass histogram region 
+	    
+	    if(pi0Pt < lowpi0PtCut_ || pi0Pt > highpi0PtCut_)
+	      continue;
+	    if(pi0Eta <= lowEtaLimit || pi0Eta >= highEtaLimit)
+	      continue;
+	    
+	    if(combinedEventPi0Mass > 0.0 && combinedEventPi0Mass < maximumPi0MassForHistogram) {
+	      if(sameEventCheck) {
+		pi0MassHistSameEvent->Fill(combinedEventPi0Mass);
+		pi0PhiTrueHist->Fill(pi0Phi);
+		pi0EtaTrueHist->Fill(pi0Eta);
+		
+		char histogramName1[200];
+		for(int kPt=0; kPt<bins1; kPt++) {
+		  if(pi0Pt > NptBins_[kPt] && pi0Pt <= NptBins_[kPt+1])
+		    {
+		      sprintf(histogramName1, "pi0MassSameEventPtBin%d", kPt);
+		      pi0MassHistSameEventvsPt[histogramName1]->Fill(combinedEventPi0Mass);
+		    }
 		}
-
-		///// For di-pion correlations //////
-		/*		TVector3 pvector;
-		  pvector.SetPtEtaPhi(pi0Pt,pi0Eta,pi0Phi);
-		  
-		  if(pi0Eta<=etaMax_ass_ && pi0Eta>=etaMin_ass_
-		  && pi0Pt<=ptMax_ass_ && pi0Pt>=ptMin_ass_)
-		  {
-		  pVect_ass.push_back(pvector);
-		  tPt_->Fill(pi0Pt);
-		  tEta_->Fill(pi0Eta);
-		  tPhi_->Fill(pi0Phi);
-		  }*/
-		/////////////////////////////////////
 		
-	      }
-	      
-	      // For eta-hadron correlations 
-	      if(combinedEventPi0Mass >=0.4 && combinedEventPi0Mass < 0.6) {
-		if(etaHadronCorrelations_) {
-		  TVector3 pvectorPi0;
-		  pvectorPi0.SetPtEtaPhi(pi0Pt,pi0Eta,pi0Phi);
-		  pVect_trg.push_back(pvectorPi0); }
-	      }
-	      
-	    } // same event check
-	    else {
-	      
-	      pi0MassHistMixed->Fill(combinedEventPi0Mass);
-	      
-	      char histogramName3[200];
-	      for(int kPt=0; kPt<bins1; kPt++) {
-		if(pi0Pt > NptBins_[kPt] && pi0Pt <= NptBins_[kPt+1])
-		  {
-		    sprintf(histogramName3, "pi0MassMixedEventPtBin%d", kPt);
-		    pi0MassHistMixedEventvsPt[histogramName3]->Fill(combinedEventPi0Mass);
+		//		if(combinedEventPi0Mass >=0.066 && combinedEventPi0Mass <= 0.16) {
+		if(combinedEventPi0Mass >=0.19 && combinedEventPi0Mass < 0.24) {
+		  //	      if(combinedEventPi0Mass >=0.24 && combinedEventPi0Mass < 0.28) {
+		  //Used to calculate the correlation function from the side-band
+		  _pi0Spectrum->Fill(pi0Eta, pi0Pt, occ);
+		  pi0PtTrueHist->Fill(pi0Pt);
+		  
+		  if(pi0HadronCorrelations_) {
+		    TVector3 pvectorPi0;
+		    pvectorPi0.SetPtEtaPhi(pi0Pt,pi0Eta,pi0Phi);
+		    pVect_trg.push_back(pvectorPi0);
 		  }
-	      }
-	      
-	    } // check for mixed event mode
-	  } // check histogram mass window
+		  
+		  ///// For di-pion correlations //////
+		  /*		TVector3 pvector;
+		    pvector.SetPtEtaPhi(pi0Pt,pi0Eta,pi0Phi);
+		    
+		    if(pi0Eta<=etaMax_ass_ && pi0Eta>=etaMin_ass_
+		    && pi0Pt<=ptMax_ass_ && pi0Pt>=ptMin_ass_)
+		    {
+		    pVect_ass.push_back(pvector);
+		    tPt_->Fill(pi0Pt);
+		    tEta_->Fill(pi0Eta);
+		    tPhi_->Fill(pi0Phi);
+		    }*/
+		  /////////////////////////////////////
+		  
+		}
+		
+		// For eta-hadron correlations 
+		if(combinedEventPi0Mass >=0.4 && combinedEventPi0Mass < 0.6) {
+		  if(etaHadronCorrelations_) {
+		    TVector3 pvectorPi0;
+		    pvectorPi0.SetPtEtaPhi(pi0Pt,pi0Eta,pi0Phi);
+		    pVect_trg.push_back(pvectorPi0); }
+		}
+		
+	      } // same event check
+	      else {
+		
+		pi0MassHistMixed->Fill(combinedEventPi0Mass);
+		
+		char histogramName3[200];
+		for(int kPt=0; kPt<bins1; kPt++) {
+		  if(pi0Pt > NptBins_[kPt] && pi0Pt <= NptBins_[kPt+1])
+		    {
+		      sprintf(histogramName3, "pi0MassMixedEventPtBin%d", kPt);
+		      pi0MassHistMixedEventvsPt[histogramName3]->Fill(combinedEventPi0Mass);
+		    }
+		}
+		
+	      } // check for mixed event mode
+	    } // check histogram mass window
+	    
+	  } // loop over previous event clusters
 	  
-	} // loop over previous event clusters
+	} // loop over event buffer
 	
-      } // loop over event buffer
-      
-    } // loop over current clusters
-
-    currentBufferEventIndexCluster++;
-    if(currentBufferEventIndexCluster == bufferDepth)
-      currentBufferEventIndexCluster = 0;  // roll back to the start of the buffer for filling with the next event
-    
-    if(currentBufferEventIndexCluster >= bufferDepth) {
-      cerr << "\n Programming error: attempting to set an index beyond the event limit in the buffer";
-      cerr << endl;
-      return;
-  }
- 
-  }//// check for minimum number of clusters in the this event
-
-  /////// Finally for pi0-hadron correlations //////////////////
-  /////// Calculating the signal first ////////////////
-
-  int nMult_trg = (int)pVect_trg.size();
-  int nMult_ass = (int)pVect_ass.size();
-
-  for(int ntrg=0; ntrg<nMult_trg; ++ntrg)
-    {
-      TVector3 pvector_trg = (pVect_trg)[ntrg];
-      double eta_trg = pvector_trg.Eta();
-      double phi_trg = pvector_trg.Phi();
-      double pt_trg = pvector_trg.Pt(); //correction
-
-      for(int nass=0; nass<nMult_ass; nass++)
-        {
-          TVector3 pvector_ass = (pVect_ass)[nass];
-          double eta_ass = pvector_ass.Eta();
-          double phi_ass = pvector_ass.Phi();
-	  double pt_ass = pvector_ass.Pt();
-
-          double deltaEta = eta_ass - eta_trg;
-          double deltaPhi = phi_ass - phi_trg;
-          if(deltaPhi > _pi) deltaPhi = deltaPhi - 2*_pi;
-          if(deltaPhi < -_pi) deltaPhi = deltaPhi + 2*_pi;
-          if(deltaPhi > -_pi && deltaPhi < -_pi/2.0) deltaPhi = deltaPhi + 2*_pi;
-
-          if(deltaEta == 0 && deltaPhi == 0) continue;
-
-	  if(pi0HadronCorrelations_ || etaHadronCorrelations_) {
-	    
-	    char histogramName5[200];
-	    for(int kPt=0; kPt<bins1; kPt++) {
-	      //	      if(pt_ass > NptBins_[kPt] && pt_ass <= NptBins_[kPt+1])
-	      if(pt_trg > NptBins_[kPt] && pt_trg <= NptBins_[kPt+1]) //correction
-		{
-		  sprintf(histogramName5, "hSignalPtBin%d", kPt);
-		  
-		  //		  hSignal[histogramName5]->Fill(deltaEta,deltaPhi,1.0/nMult_trg/nMult_ass);
-		  //		  hSignal[histogramName5]->Fill(deltaEta,2*_pi - deltaPhi,1.0/nMult_trg/nMult_ass); 
-		  hSignal[histogramName5]->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
-		  hSignal[histogramName5]->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
-		  hSignal[histogramName5]->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
-		  hSignal[histogramName5]->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
-		  hSignal[histogramName5]->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg);
-		  hSignal[histogramName5]->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg); 
-		}
-	    }
-	  }
-
-	  if(diHadronCorrelations_) {
-	    hSignal1->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
-	    hSignal1->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
-	    hSignal1->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
-	    hSignal1->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
-	    hSignal1->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg);
-	    hSignal1->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg); 
-	  }
-	}
-    }
-  pVectVect_trg.push_back(pVect_trg);
-  pVectVect_ass.push_back(pVect_ass);
-  zvtxVect.push_back(zVertexEventSelected); 
-  
-  
-  ///////////////////////////////////////////////////////////////////////////
-  
-  /// mc truth
-  isMC = !iEvent.isRealData();
-  
-  // get MC info from hiGenParticleCandidates 
-  Handle<GenParticleCollection> hiGenParticles;
-  if(isMC) iEvent.getByLabel("hiGenParticles", hiGenParticles);
-  
-  // get GEANT sim tracks and vertices (includes conversions)
-  Handle<SimTrackContainer> simTracks_h;
-  const SimTrackContainer* simTracks;
-  if( isMC ) iEvent.getByLabel("g4SimHits", simTracks_h);
-  simTracks = (simTracks_h.isValid()) ? simTracks_h.product() : 0;
+      } // loop over current clusters
    
-  Handle<SimVertexContainer> simVert_h;
-  const SimVertexContainer* simVertices;
-  if( isMC ) iEvent.getByLabel("g4SimHits", simVert_h);
-  simVertices = (simVert_h.isValid()) ? simVert_h.product() : 0;
+          
+      currentBufferEventIndexCluster++;
+      if(currentBufferEventIndexCluster == bufferDepth)
+	currentBufferEventIndexCluster = 0;  // roll back to the start of the buffer for filling with the next event
+      
+      if(currentBufferEventIndexCluster >= bufferDepth) {
+	cerr << "\n Programming error: attempting to set an index beyond the event limit in the buffer";
+	cerr << endl;
+	return;
+      }
+      
+    }//// check for minimum number of clusters in the this event
+ 
 
-  if( isMC ) 
-    {
-      nMC = nSIM = 0;
-      int current_particle = -1;
-      set<int> mothers;
-      map<const GenParticle*, int> mapMC;
-      map<const GenParticle*, int>::iterator mapMC_it;
-      //int where_is_pi0_mother(0);  //debug
-      int p_count(0);
-      int motherIDMC_temp = -1;
+
+    /////// Finally for pi0-hadron correlations //////////////////
+    /////// Calculating the signal first ////////////////
     
-      //cout << endl << "event" << endl;
-      for (GenParticleCollection::const_iterator p = hiGenParticles->begin(); p != hiGenParticles->end(); ++p, ++p_count) 
-	{
-	  if ( nMC >= (nMaxMC-1) ) continue;
-
-	  // looking for mother particle
-	  motherIDMC_temp = -1;
-	  //where_is_pi0_mother = -1; // debug
-	  if (p->numberOfMothers() > 0) 
-	    {
-	      const Candidate * mom = p->mother();
-	      for (size_t j = 0; j != hiGenParticles->size(); ++j) 
-		{
-		  const Candidate * ref = &((*hiGenParticles)[j]);
-		  if (mom==ref)
-		    {
-		      motherIDMC_temp = j; 
-		      //if(mom->pdgId()==kPi0)//debug
-		      //   where_is_pi0_mother = j; // debug
-		    }
-		}
-	    } 
-         
-	  // Neutral particles kept with >100 MeV 
-	  if ( p->status()==1  && p->pt()>0.100 )//|| (p->charge()!=0 && p->pt()>0.075)) ) 
-	    {
-	      pdgIdMC[nMC] = p->pdgId();
-	      statusMC[nMC] = p->status();
-	      ptMC[nMC] = p->pt();
-	      eMC[nMC] = p->energy();
-	      etaMC[nMC] = p->eta(); 
-	      phiMC[nMC] = p->phi(); 
-	      mapMC[&(*p)] = nMC;
-	      convertedMC[nMC] = false;
-	      motherIDMC[nMC] = -1; //((const hiGenParticle*)p->mother())->pdgId(); 
-	      motherIndexMC[nMC] = -1; //hic::check
-	      current_particle = nMC;
-	      ++nMC; 
-
-	      // if stable photon/electron, find parent
-	      if (p->status() == 1 && motherIDMC_temp != -1 && (p->pdgId() == kPhoton || fabs(p->pdgId()) == kElectron ) ) //|| p->pdgId() == 221)) // 221=eta0 
-		{
-		  const GenParticle *mom = (const GenParticle*)p->mother();
-		   
-		  // saving the mother pdgId 
-		  motherIDMC[current_particle] = mom->pdgId();
-
-		  if ( mom->status() == 2 &&  (mom->pdgId()<81 || mom->pdgId()>100)) // avoid to store partons and MC internal
-		    {
-		      // if the mother particle is found for the first time
-		      if(mothers.find(motherIDMC_temp) == mothers.end())
-			{
-			  mothers.insert(motherIDMC_temp);
-			  if (nMC>=nMaxMC) continue;
-			  pdgIdMC[nMC] = mom->pdgId();
-			  statusMC[nMC] = mom->status();
-			  ptMC[nMC] = mom->pt();
-			  eMC[nMC] = mom->energy();
-			  etaMC[nMC] = mom->eta();
-			  phiMC[nMC] = mom->phi(); 
-			  mapMC[mom] = nMC;
-			  //motherIndexMC[nMC-1] = nMC;
-			  ++nMC;
-			}
-		      //else
-		      //{
-		      //motherIndexMC[nMC-1] = mapMC.find(mom)->second;
-		      //}
-		    }
-
-		  mapMC_it =  mapMC.find(mom);
-		  if(mapMC_it != mapMC.end())
-		    motherIndexMC[current_particle] = mapMC_it->second;
-		  //cout << "   my_pi0::" << motherIndexMC[current_particle] << endl;
-		} // stable particle has parents 
-	    } // particle selection
-	} // loop over particles
-      
-
-      //----- Figure out the particle decays in tracker volume  ------
-
-      // Vertices only return trackID of their parent SimTrack
-      // Figure out the mapping from trackID to SimTrack
-      map<unsigned int, const SimTrack*> trackMap;
-      for (SimTrackContainer::const_iterator iSim = simTracks->begin(); iSim != simTracks->end(); ++iSim) 
-	{
-	  if (!iSim->noVertex()) 
-	    {
-	      assert(trackMap.find(iSim->trackId())==trackMap.end());
-	      trackMap[iSim->trackId()] = &(*iSim);
+    int nMult_trg = (int)pVect_trg.size();
+    int nMult_ass = (int)pVect_ass.size();
+    
+    for(int ntrg=0; ntrg<nMult_trg; ++ntrg)
+      {
+	TVector3 pvector_trg = (pVect_trg)[ntrg];
+	double eta_trg = pvector_trg.Eta();
+	double phi_trg = pvector_trg.Phi();
+	double pt_trg = pvector_trg.Pt(); //correction
+	
+	for(int nass=0; nass<nMult_ass; nass++)
+	  {
+	    TVector3 pvector_ass = (pVect_ass)[nass];
+	    double eta_ass = pvector_ass.Eta();
+	    double phi_ass = pvector_ass.Phi();
+	    double pt_ass = pvector_ass.Pt();
+	    
+	    double deltaEta = eta_ass - eta_trg;
+	    double deltaPhi = phi_ass - phi_trg;
+	    if(deltaPhi > _pi) deltaPhi = deltaPhi - 2*_pi;
+	    if(deltaPhi < -_pi) deltaPhi = deltaPhi + 2*_pi;
+	    if(deltaPhi > -_pi && deltaPhi < -_pi/2.0) deltaPhi = deltaPhi + 2*_pi;
+	    
+	    if(deltaEta == 0 && deltaPhi == 0) continue;
+	    
+	    if(pi0HadronCorrelations_ || etaHadronCorrelations_) {
+	      
+	      char histogramName5[200];
+	      for(int kPt=0; kPt<bins1; kPt++) {
+		if(pt_trg > NptBins_[kPt] && pt_trg <= NptBins_[kPt+1]) //correction
+		  {
+		    sprintf(histogramName5, "hSignalPtBin%d", kPt);
+		    
+		    //		  hSignal[histogramName5]->Fill(deltaEta,deltaPhi,1.0/nMult_trg/nMult_ass);
+		    //		  hSignal[histogramName5]->Fill(deltaEta,2*_pi - deltaPhi,1.0/nMult_trg/nMult_ass); 
+		    hSignal[histogramName5]->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
+		    hSignal[histogramName5]->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
+		    hSignal[histogramName5]->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
+		    hSignal[histogramName5]->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
+		    hSignal[histogramName5]->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg);
+		    hSignal[histogramName5]->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg); 
+		  }
+	      }
 	    }
-	}
-
-
-      // Find all SimTracks that come from decays before the ECAL
-      // and find their parent SimTracks
-      map<const SimTrack*, const SimTrack*> promptParent; // daughter->mother
-      map<const SimTrack*, set<const SimTrack*> > promptDecays; // m->ds
-      map<const SimTrack*, const SimVertex*> promptVertex; // daughter->vertex
-      
-      for (SimTrackContainer::const_iterator iSim = simTracks->begin(); iSim != simTracks->end(); ++iSim) 
-	{
-	  if (!iSim->noVertex()) 
-	    {
-	      // Find the parent vertex and see if it classifies as an early decay
-	      // Exclude the primary vertex (noParent)
-	      SimVertex const& vtx = (*simVertices)[iSim->vertIndex()];
-	      if (!vtx.noParent() && vtx.position().Rho() < 129 && fabs(vtx.position().z()) < 304) 
-		{
-		  // Find parent SimParticle that produced this vertex
-		  // vtx->parentIndex is NOT a vector index :( so use trackMap
-		  assert(trackMap.find(vtx.parentIndex())!=trackMap.end());
-		  const SimTrack* p = trackMap[vtx.parentIndex()];
-		  promptParent[&(*iSim)] = p;
-		  promptDecays[p].insert(&(*iSim));
-		  promptVertex[&(*iSim)] = &vtx;
-		} // early decay
-	    } // has vertex
-	} // for simTracks
-      
-      // Find grandparent SimTracks all the way up the chain
-      map<const SimTrack*, const SimTrack*> chainParents;// g.daughter->grandma
-      map<const SimTrack*, set<const SimTrack*> > chainDecays; // gm->gds
-
-      for (map<const SimTrack*, const SimTrack*>::const_iterator iSim = promptParent.begin(); iSim != promptParent.end(); ++iSim) 
-	{
-	  // Check that the SimTrack has no daughters itself (=grandchild)
-	  if (promptDecays.find(iSim->first)==promptDecays.end())
-	    {
-	      // Find the first SimTrack in the parentage chain (=grandparent)
-	      const SimTrack *p = iSim->second;
-	      while (promptParent.find(p) != promptParent.end())
-		p = promptParent[p];
-	      chainParents[iSim->first] = p;
-	      chainDecays[p].insert(iSim->first);
-	    } // is grandchild
-	} // for promptParent
-      
-      // Associate grandParents to hiGenParticles
-      map<const GenParticle*, const SimTrack*> decayedSims;
-      map<const SimTrack*, const GenParticle*> decayedGens;
-
-      for (map<const SimTrack*, set<const SimTrack*> >::const_iterator iSim = chainDecays.begin(); iSim != chainDecays.end(); ++iSim) 
-	{
-	  if (iSim->first->noGenpart()) 
-	    continue;
-
-	  // Make sure the decay chain wasn't already pruned out
-	  if (promptDecays.find(iSim->first)!=promptDecays.end() && promptDecays[iSim->first].size()!=0) 
-	    {
-	      // NB: genpartIndex offset by 1
-	      const GenParticle* iGen =
-		&(*hiGenParticles)[iSim->first->genpartIndex()-1];
-	      assert(iGen->pdgId()==iSim->first->type());
-	      decayedSims[iGen] = iSim->first;
-	      decayedGens[iSim->first] = iGen;
+	    
+	    if(diHadronCorrelations_) {
+	      hSignal1->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
+	      hSignal1->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
+	      hSignal1->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
+	      hSignal1->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
+	      hSignal1->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg);
+	      hSignal1->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg); 
 	    }
-	} // for chainParents 
-      
-    } // if isMC 
-  else
-    {
-      nMC = 1;
-      pdgIdMC[0] = -99999;
-      statusMC[0] = -99999;
-      motherIndexMC[0] = -99999;
-      motherIDMC[0] = -99999;
-      ptMC[0] = -99999;
-      eMC[0] = -99999;
-      etaMC[0] = -99999;
-      phiMC[0] = -99999;
-      convertedMC[0] = 0;
-
-      nSIM = 1;
-      pdgIdSIM[0] = -99999;
-      statusSIM[0] = -99999;
-      motherGenIndexSIM[0] = -99999;
-      ptSIM[0] = -99999;
-      eSIM[0] = -99999;
-      etaSIM[0] = -99999;
-      phiSIM[0] = -99999;
-      rSIM[0] = -99999;
-      zSIM[0] = -99999;
-    }
-
- }
+	  }
+      }
+    pVectVect_trg.push_back(pVect_trg);
+    pVectVect_ass.push_back(pVect_ass);
+    zvtxVect.push_back(zVertexEventSelected); 
+    
+    
+    ///////////////////////////////////////////////////////////////////////////
+    
+    /// mc truth
+    isMC = !iEvent.isRealData();
+    
+    // get MC info from hiGenParticleCandidates 
+    Handle<GenParticleCollection> hiGenParticles;
+    if(isMC) iEvent.getByLabel("hiGenParticles", hiGenParticles);
+    
+    // get GEANT sim tracks and vertices (includes conversions)
+    Handle<SimTrackContainer> simTracks_h;
+    const SimTrackContainer* simTracks;
+    if( isMC ) iEvent.getByLabel("g4SimHits", simTracks_h);
+    simTracks = (simTracks_h.isValid()) ? simTracks_h.product() : 0;
+    
+    Handle<SimVertexContainer> simVert_h;
+    const SimVertexContainer* simVertices;
+    if( isMC ) iEvent.getByLabel("g4SimHits", simVert_h);
+    simVertices = (simVert_h.isValid()) ? simVert_h.product() : 0;
+    
+    if( isMC ) 
+      {
+	nMC = nSIM = 0;
+	int current_particle = -1;
+	set<int> mothers;
+	map<const GenParticle*, int> mapMC;
+	map<const GenParticle*, int>::iterator mapMC_it;
+	//int where_is_pi0_mother(0);  //debug
+	int p_count(0);
+	int motherIDMC_temp = -1;
+	
+	//cout << endl << "event" << endl;
+	for (GenParticleCollection::const_iterator p = hiGenParticles->begin(); p != hiGenParticles->end(); ++p, ++p_count) 
+	  {
+	    if ( nMC >= (nMaxMC-1) ) continue;
+	    
+	    // looking for mother particle
+	    motherIDMC_temp = -1;
+	    //where_is_pi0_mother = -1; // debug
+	    if (p->numberOfMothers() > 0) 
+	      {
+		const Candidate * mom = p->mother();
+		for (size_t j = 0; j != hiGenParticles->size(); ++j) 
+		  {
+		    const Candidate * ref = &((*hiGenParticles)[j]);
+		    if (mom==ref)
+		      {
+			motherIDMC_temp = j; 
+			//if(mom->pdgId()==kPi0)//debug
+			//   where_is_pi0_mother = j; // debug
+		      }
+		  }
+	      } 
+	    
+	    // Neutral particles kept with >100 MeV 
+	    if ( p->status()==1  && p->pt()>0.100 )//|| (p->charge()!=0 && p->pt()>0.075)) ) 
+	      {
+		pdgIdMC[nMC] = p->pdgId();
+		statusMC[nMC] = p->status();
+		ptMC[nMC] = p->pt();
+		eMC[nMC] = p->energy();
+		etaMC[nMC] = p->eta(); 
+		phiMC[nMC] = p->phi(); 
+		mapMC[&(*p)] = nMC;
+		convertedMC[nMC] = false;
+		motherIDMC[nMC] = -1; //((const hiGenParticle*)p->mother())->pdgId(); 
+		motherIndexMC[nMC] = -1; //hic::check
+		current_particle = nMC;
+		++nMC; 
+		
+		// if stable photon/electron, find parent
+		if (p->status() == 1 && motherIDMC_temp != -1 && (p->pdgId() == kPhoton || fabs(p->pdgId()) == kElectron ) ) //|| p->pdgId() == 221)) // 221=eta0 
+		  {
+		    const GenParticle *mom = (const GenParticle*)p->mother();
+		    
+		    // saving the mother pdgId 
+		    motherIDMC[current_particle] = mom->pdgId();
+		    
+		    if ( mom->status() == 2 &&  (mom->pdgId()<81 || mom->pdgId()>100)) // avoid to store partons and MC internal
+		      {
+			// if the mother particle is found for the first time
+			if(mothers.find(motherIDMC_temp) == mothers.end())
+			  {
+			    mothers.insert(motherIDMC_temp);
+			    if (nMC>=nMaxMC) continue;
+			    pdgIdMC[nMC] = mom->pdgId();
+			    statusMC[nMC] = mom->status();
+			    ptMC[nMC] = mom->pt();
+			    eMC[nMC] = mom->energy();
+			    etaMC[nMC] = mom->eta();
+			    phiMC[nMC] = mom->phi(); 
+			    mapMC[mom] = nMC;
+			    //motherIndexMC[nMC-1] = nMC;
+			    ++nMC;
+			  }
+			//else
+			//{
+			//motherIndexMC[nMC-1] = mapMC.find(mom)->second;
+			//}
+		      }
+		    
+		    mapMC_it =  mapMC.find(mom);
+		    if(mapMC_it != mapMC.end())
+		      motherIndexMC[current_particle] = mapMC_it->second;
+		    //cout << "   my_pi0::" << motherIndexMC[current_particle] << endl;
+		  } // stable particle has parents 
+	      } // particle selection
+	  } // loop over particles
+	
+	
+	//----- Figure out the particle decays in tracker volume  ------
+	
+	// Vertices only return trackID of their parent SimTrack
+	// Figure out the mapping from trackID to SimTrack
+	map<unsigned int, const SimTrack*> trackMap;
+	for (SimTrackContainer::const_iterator iSim = simTracks->begin(); iSim != simTracks->end(); ++iSim) 
+	  {
+	    if (!iSim->noVertex()) 
+	      {
+		assert(trackMap.find(iSim->trackId())==trackMap.end());
+		trackMap[iSim->trackId()] = &(*iSim);
+	      }
+	  }
+	
+	
+	// Find all SimTracks that come from decays before the ECAL
+	// and find their parent SimTracks
+	map<const SimTrack*, const SimTrack*> promptParent; // daughter->mother
+	map<const SimTrack*, set<const SimTrack*> > promptDecays; // m->ds
+	map<const SimTrack*, const SimVertex*> promptVertex; // daughter->vertex
+	
+	for (SimTrackContainer::const_iterator iSim = simTracks->begin(); iSim != simTracks->end(); ++iSim) 
+	  {
+	    if (!iSim->noVertex()) 
+	      {
+		// Find the parent vertex and see if it classifies as an early decay
+		// Exclude the primary vertex (noParent)
+		SimVertex const& vtx = (*simVertices)[iSim->vertIndex()];
+		if (!vtx.noParent() && vtx.position().Rho() < 129 && fabs(vtx.position().z()) < 304) 
+		  {
+		    // Find parent SimParticle that produced this vertex
+		    // vtx->parentIndex is NOT a vector index :( so use trackMap
+		    assert(trackMap.find(vtx.parentIndex())!=trackMap.end());
+		    const SimTrack* p = trackMap[vtx.parentIndex()];
+		    promptParent[&(*iSim)] = p;
+		    promptDecays[p].insert(&(*iSim));
+		    promptVertex[&(*iSim)] = &vtx;
+		  } // early decay
+	      } // has vertex
+	  } // for simTracks
+	
+	// Find grandparent SimTracks all the way up the chain
+	map<const SimTrack*, const SimTrack*> chainParents;// g.daughter->grandma
+	map<const SimTrack*, set<const SimTrack*> > chainDecays; // gm->gds
+	
+	for (map<const SimTrack*, const SimTrack*>::const_iterator iSim = promptParent.begin(); iSim != promptParent.end(); ++iSim) 
+	  {
+	    // Check that the SimTrack has no daughters itself (=grandchild)
+	    if (promptDecays.find(iSim->first)==promptDecays.end())
+	      {
+		// Find the first SimTrack in the parentage chain (=grandparent)
+		const SimTrack *p = iSim->second;
+		while (promptParent.find(p) != promptParent.end())
+		  p = promptParent[p];
+		chainParents[iSim->first] = p;
+		chainDecays[p].insert(iSim->first);
+	      } // is grandchild
+	  } // for promptParent
+	
+	// Associate grandParents to hiGenParticles
+	map<const GenParticle*, const SimTrack*> decayedSims;
+	map<const SimTrack*, const GenParticle*> decayedGens;
+	
+	for (map<const SimTrack*, set<const SimTrack*> >::const_iterator iSim = chainDecays.begin(); iSim != chainDecays.end(); ++iSim) 
+	  {
+	    if (iSim->first->noGenpart()) 
+	      continue;
+	    
+	    // Make sure the decay chain wasn't already pruned out
+	    if (promptDecays.find(iSim->first)!=promptDecays.end() && promptDecays[iSim->first].size()!=0) 
+	      {
+		// NB: genpartIndex offset by 1
+		const GenParticle* iGen =
+		  &(*hiGenParticles)[iSim->first->genpartIndex()-1];
+		assert(iGen->pdgId()==iSim->first->type());
+		decayedSims[iGen] = iSim->first;
+		decayedGens[iSim->first] = iGen;
+	      }
+	  } // for chainParents 
+	
+      } // if isMC 
+    else
+      {
+	nMC = 1;
+	pdgIdMC[0] = -99999;
+	statusMC[0] = -99999;
+	motherIndexMC[0] = -99999;
+	motherIDMC[0] = -99999;
+	ptMC[0] = -99999;
+	eMC[0] = -99999;
+	etaMC[0] = -99999;
+	phiMC[0] = -99999;
+	convertedMC[0] = 0;
+	
+	nSIM = 1;
+	pdgIdSIM[0] = -99999;
+	statusSIM[0] = -99999;
+	motherGenIndexSIM[0] = -99999;
+	ptSIM[0] = -99999;
+	eSIM[0] = -99999;
+	etaSIM[0] = -99999;
+	phiSIM[0] = -99999;
+	rSIM[0] = -99999;
+	zSIM[0] = -99999;
+      }
+    
+}
 
 
 
@@ -1683,6 +1713,9 @@ void EcalFlowNtp::initHistos(const edm::Service<TFileService> & fs)
 
   PhotonClusterPt = pi0Related.make<TH1D>("PhotonClusterPt", "Photon cluster p_{T}", 100, 0, 100);
   PhotonClusterPt->SetXTitle("Transverse momentum p_T (GeV/c)");
+
+  EventsLeadPhotonPt = pi0Related.make<TH1D>("EventsLeadPhotonPt", "Leading Photon p_{T}", 100, 0, 100);
+  EventsLeadPhotonPt->SetXTitle("Transverse momentum p_T (GeV/c)");
 
   PFPhotonPt = pi0Related.make<TH1D>("PFPhotonPt", "PF Photon p_{T}", 100, 0, 100);
   PFPhotonPt->SetXTitle("Transverse momentum p_T (GeV/c)");
