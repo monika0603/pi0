@@ -42,27 +42,6 @@ process.load("HLTrigger.HLTfilters.hltHighLevel_cfi")
 process.hltSingleTrigger = process.hltHighLevel.clone()
 process.hltSingleTrigger.HLTPaths = ["HLT_PAZeroBiasPixel_SingleTrack_v1"]
 
-process.hltTrack12 = process.hltHighLevel.clone()
-process.hltTrack12.HLTPaths = ["HLT_PAFullTrack12_v1",
-                               "HLT_PAFullTrack12_v2"]
-
-process.hltTrack20 = process.hltHighLevel.clone()
-process.hltTrack20.HLTPaths = ["HLT_PAFullTrack20_v1",
-                               "HLT_PAFullTrack20_v2"]
-
-process.hltTrack30 = process.hltHighLevel.clone()
-process.hltTrack30.HLTPaths = ["HLT_PAFullTrack30_v1",
-                               "HLT_PAFullTrack30_v2"]
-
-process.hltTrack12.andOr = cms.bool(True)
-process.hltTrack12.throw = cms.bool(False)
-
-process.hltTrack20.andOr = cms.bool(True)
-process.hltTrack20.throw = cms.bool(False)
-
-process.hltTrack30.andOr = cms.bool(True)
-process.hltTrack30.throw = cms.bool(False)
-
 process.EcalFlowNtp.AlCaStreamEBpi0Tag = cms.untracked.InputTag("ecalRecHit","EcalRecHitsEB")
 process.EcalFlowNtp.pfCandidatesTag = cms.InputTag("particleFlow")
 process.EcalFlowNtp.srcTowers = cms.InputTag("towerMaker")
@@ -98,13 +77,15 @@ process.EcalFlowNtp.diHadronCorrelations = cms.bool(False)
 process.EcalFlowNtp.pi0HadronCorrelations = cms.bool(True)
 process.EcalFlowNtp.etaHadronCorrelations = cms.bool(False)
 process.EcalFlowNtp.rotatedBackground = cms.bool(False)
-process.EcalFlowNtp.cutByLeadingTrackPt = cms.bool(True)
+process.EcalFlowNtp.cutByLeadingTrackPt = cms.bool(False)
 process.EcalFlowNtp.leadingTrackPtMin = cms.double(0.0)
-process.EcalFlowNtp.leadingTrackPtMax = cms.double(14.0)
-process.EcalFlowNtp.swissThreshold = cms.double(0.85)
+process.EcalFlowNtp.leadingTrackPtMax = cms.double(999.0)
+process.EcalFlowNtp.swissThreshold = cms.double(0.95)
 process.EcalFlowNtp.timeThreshold = cms.double(4.0)
 process.EcalFlowNtp.avoidIeta85 = cms.double(False)
-
+process.EcalFlowNtp.cutByLeadingPhotonPt = cms.bool(True)
+process.EcalFlowNtp.leadingPhotonPtMin = cms.double(0.0)
+process.EcalFlowNtp.leadingPhotonPtMax = cms.double(999.0)
 
 process.EcalFlowNtpMinBias = process.EcalFlowNtp.clone()
 
