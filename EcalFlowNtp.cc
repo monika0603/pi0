@@ -93,10 +93,10 @@ CentralityProvider * centProvider;
 EcalFlowNtp::EcalFlowNtp(const edm::ParameterSet& ps) :
   nMassBins(200),
   clustEnrCut(0.4),
-  clustS49Cut(0.87),
+  clustS49Cut(0.74),
   clustPtCut(0.0),
   clustS1Cut(0.2),
-  clustS25Cut(0.20),
+  clustS25Cut(0.2),
   countMixedClusterExamined(0),
   ppConversionCutRadius(-0.20),
   minimumSeparation(0.05),
@@ -141,6 +141,7 @@ EcalFlowNtp::EcalFlowNtp(const edm::ParameterSet& ps) :
   diHadronCorrelations_ = ps.getParameter<bool>("diHadronCorrelations");
   pi0HadronCorrelations_ = ps.getParameter<bool>("pi0HadronCorrelations");
   etaHadronCorrelations_ = ps.getParameter<bool>("etaHadronCorrelations");
+  doEffCorrections_ = ps.getParameter<bool>("doEffCorrections");
   lowpi0PtCut_ = ps.getParameter<double>("lowpi0PtCut");
   highpi0PtCut_ = ps.getParameter<double>("highpi0PtCut");
   vertexZMax_ = ps.getParameter<double>("vertexZMax");
@@ -171,7 +172,7 @@ EcalFlowNtp::EcalFlowNtp(const edm::ParameterSet& ps) :
   cutPtErrMax_ = ps.getUntrackedParameter<double>("cutPtErrMax", 0.1);
   
   minimumSeparationSquared = minimumSeparation*minimumSeparation;
-  usePtDependentSeparation=true;
+  usePtDependentSeparation=false;
   //maximumNumberAcceptedCluster = 1000;
   
   binWidth = 1000.0*maximumPi0MassForHistogram/nMassBins + 0.001;
@@ -198,15 +199,49 @@ EcalFlowNtp::EcalFlowNtp(const edm::ParameterSet& ps) :
   else
     cout << "\n There is no recalibration of the cluster energy value" << endl;
 
+  useClusterCrystalLimitLowPtOnly_ = ps.getParameter<bool> ("useClusterCrystalLimitLowPtOnly");
+  clusterCrystalLimitLowPtOnly_ = ps.getParameter<double> ("clusterCrystalLowPtOnly");
+
   useClusterCrystalLimit_ = ps.getParameter<bool> ("useClusterCrystalLimit");
   lowCrystalLimit_ = ps.getParameter<int> ("lowCrystalLimit");    // used only if useClusterCrystalLimit is true     
   highCrystalLimit_ = ps.getParameter<int> ("highCrystalLimit");  // used only if useClusterCrystalLimit is true       
 
-  if(useClusterCrystalLimit_)
-    cout<< "\n Only a cluster having crystal number from " << lowCrystalLimit_ << " to " << highCrystalLimit_ << " will be accepted"<< endl;
-  else
-    cout<< "\n There is no check on the number of crystals in a cluster" << endl;
-  
+  if(useClusterCrystalLimit_) {
+    if(useClusterCrystalLimitLowPtOnly_) {
+      cout << "\n Only a cluster having crystal number from " << lowCrystalLimit_ << " to " << highCrystalLimit_ << " will be accepted"  << endl;
+    }
+    else {
+      cout << "\n For the pi0 candidate with a pT below " << clusterCrystalLimitLowPtOnly_ ;
+      cout << " GeV/c then both clusters must have a crystal number in the range " << lowCrystalLimit_ << " to " << highCrystalLimit_ << endl;
+    }
+    cout << "\n There is no check on the number of crystals in a cluster" << endl;
+  } // check on useClusterCrystalLimit   
+
+  doOneDimensionTimeCut_ = ps.getParameter<bool>("doOneDimensionTimeCut");
+  oneDimensionTimeCut_ = ps.getParameter<double>("oneDimensionTimeCut");
+  if(doOneDimensionTimeCut_) {
+    cout << "\n One dimensional (fixed window) time cut enabled at a value " << oneDimensionTimeCut_;
+      }
+
+  doTwoDimensionTimeCut_ = ps.getParameter<bool>("doTwoDimensionTimeCut");
+  twoDimensionTimeCutFactor_ = ps.getParameter<double>("twoDimensionTimeCutFactor");
+  if(doOneDimensionTimeCut_ && doTwoDimensionTimeCut_) {
+    cerr <<"\n\n Input parameters conflict: asking for both a one-dimensional and a two-dimensional energy cut to be true";
+    return; }
+
+  if(doTwoDimensionTimeCut_) {
+    cout << "\n Two dimensional (Energy vs time) cut enabled at a value " << twoDimensionTimeCutFactor_;
+      }
+
+  doWeightedTimeCut_ = ps.getParameter<bool>("doWeightedTimeCut");
+  if(doWeightedTimeCut_) {
+    if(!doTwoDimensionTimeCut_) {
+      cerr <<"\n\n Input parameters conflict: asking for a weighted time cut but not asking for ...";
+    }
+    else {
+      cout << "\n The two dimensional weighted time cut (weighted time - seed time) is enabled";
+	}
+  }
 
   // Initilization of track histograms [Monika Sharma]                                                                       
   edm::Service<TFileService> fs;
@@ -312,7 +347,7 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
   
   edm::ESHandle<CaloGeometry> geoHandle;
   iSetup.get<CaloGeometryRecord>().get(geoHandle);     
-  const CaloGeometry* caloGeom = geoHandle.product();
+  //  const CaloGeometry* caloGeom = geoHandle.product();
 
   geometry_p = geoHandle->getSubdetectorGeometry(DetId::Ecal,EcalBarrel);
   //  geometryEE_p = geoHandle->getSubdetectorGeometry(DetId::Ecal,EcalEndcap);
@@ -408,13 +443,13 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
       }
     
     // comparisons between first and additional primary vertices
-    for(unsigned int i =1; i<vsorted.size(); i++)
+    /*    for(unsigned int i =1; i<vsorted.size(); i++)
       {
 	double dz = fabs( vsorted[i].z() - vsorted[0].z() );
 	double dx = fabs( vsorted[i].x() - vsorted[0].x() );
 	double dy = fabs( vsorted[i].y() - vsorted[0].y() );
 	double dxy  = sqrt ( dx*dx + dy*dy );
-      }
+	}*/
     
     // use vertex with most tracks as primary vertex
     // determine position and error
@@ -528,7 +563,7 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 
     if (rhEBpi0.isValid() && (rhEBpi0->size() > 0)){
       
-      double rhEt;
+      //      double rhEt;
       for(itb=rhEBpi0->begin(); itb!=rhEBpi0->end(); ++itb){
 	
 	////////////// Applying the swiss-cross and timing cuts/////
@@ -538,7 +573,9 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	SwissCrossCut->Fill(swissCrx);
 	Timing->Fill(abs(itb->time()));
 	
-	if(    (swissCrx > swissThreshold_)     ||     ( abs(itb->time()) > timeThreshold_) ) continue;
+	//	if(    (swissCrx > swissThreshold_)     ||     ( abs(itb->time()) > timeThreshold_) ) continue;
+	//	if( swissCrx > swissThreshold_ ) continue;
+	//	if( abs(itb->time()) > timeThreshold_ ) continue;
 	
 	////////////////////////////////////////////////////////////
 	
@@ -579,7 +616,12 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	}
 	if(nClu>=NCLUMAX) continue;
 	if(nCry>=NCRYMAX) continue;
-	//       seedcount++;
+
+	double seedTime = itseed->time();
+	TimingInClustering->Fill(seedTime);
+	//	if( seedTime > timeThreshold_ ) continue;
+	double weightedTime = 0.0;
+
 	if(seedAlreadyUsed)continue;
 	std::vector<DetId> clus_v = topology_p->getWindow(seed_id,clusEtaSize_,clusPhiSize_);       
 	std::vector<std::pair<DetId,float> > clus_used;
@@ -684,7 +726,7 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	float e3x3 = 0; 
 	float e5x5 = 0;
 	double e4_e1 = 0;
-	double Swiss_cross;
+	//	double Swiss_cross;
 	
 	for(unsigned int j=0; j<RecHitsInWindow.size();j++){
 	  EBDetId det = (EBDetId)RecHitsInWindow[j].id(); 
@@ -704,7 +746,7 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	  float en = RecHitsInWindow[j].energy(); 
 	  
 	  int dx = diff_neta_s(seed_ieta,ieta);
-	  int dy = diff_nphi_s(seed_iphi,iphi);//
+	  int dy = diff_nphi_s(seed_iphi,iphi);
 	  
 	  double eRight = 0;
 	  double eTop = 0;
@@ -718,7 +760,7 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	  if(dx == -1) eBottom =  en;
 	  
 	  e4_e1 += (eRight + eTop + eLeft + eBottom);
-	  Swiss_cross = 1 - e4_e1;
+	  //	  Swiss_cross = 1 - e4_e1;
 	  
 	  //	if(Swiss_cross > 0.87) continue;	//Not applying the swiss-cross cut
 	  ///////////////////////////////////////
@@ -735,6 +777,7 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	    flagCry[nCry] = RecHitsInWindow[j].recoFlag();
 	    ietaCry[nCry] = ieta;
 	    iphiCry[nCry] = iphi;
+	    weightedTime += eCry[nCry]*timeCry[nCry];
 	    iCry[nCry] = det.ic();
 	    iSM[nCry] = det.ism();
 	    etaCry[nCry] = geometry_p->getGeometry(det)->getPosition().eta();
@@ -781,7 +824,9 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	S4Clu[nClu] =  s4s9_max * simple_energy;
 	S25Clu[nClu] = e5x5;
 	nCryClu[nClu] = nCryinclu;
-	
+	seedTimeClu[nClu] = seedTime;
+	weightedTimeClu[nClu] = weightedTime/e3x3;	
+
 	if(doEnergyRecalibration_) {
 	  
 	  if(nCryinclu < 1 || nCryinclu > 9) {
@@ -801,8 +846,69 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	  S25Clu[nClu] = e5x5;
 	  
 	} // check for doing energy re-calibration
-	nClu++;
+
+	if(useClusterCrystalLimit_ && useClusterCrystalLimitLowPtOnly_  && (nCryinclu < lowCrystalLimit_ || nCryinclu > highCrystalLimit_)) {
+	  //                                                                                                                      
+	  // Cluster limits option was specified, there is no requirement for low pair pT, and this cluster is outside of the limits                                                                                                                             
+	  // Cluster will be rejected                                                                                             
+	  //                                                                                                                      
+	  continue; // do not use this cluster, crystal number not in range
+	  cout<<"-X-X-X My condition is not satisfied... You are fine... "<<endl;
+	}
 	
+
+	//                                                                                                                    
+	// Check the timing information                                                                                       
+	//                                                                                                                    
+	bool goodTimingCheck = true;
+
+	if(doOneDimensionTimeCut_) {
+	  if(oneDimensionTimeCut_ < 0) {
+	    if(fabs(seedTimeClu[nClu]) < -oneDimensionTimeCut_) {
+	      goodTimingCheck = false;
+	    }
+	  } // reverse cut                                                                                                    
+	  if(doOneDimensionTimeCut_ > 0) {
+	    if(fabs(seedTimeClu[nClu]) > oneDimensionTimeCut_) {
+	      goodTimingCheck = false;
+	    }
+	  } // normal cut                                                                       
+	} // check for doing one dimensional  timing cuts on the seed crystal of the cluster
+
+	if(doTwoDimensionTimeCut_) {
+
+	  //                                                                                                          
+          // The default 2D cut has a base width of 20 ns and a minimum value of 8 ns                              
+	  // The rescaled (better) 2D cut has these dimensions reduced by the factor twoDimensionTimeCutFactor           
+	  //                                                                                                     
+     
+	  float energyInverse = 1.0/S9Clu[nClu];
+
+	  float tCut = 4.0 - 10.8452*energyInverse + 14.9102*energyInverse*energyInverse -3.065*energyInverse*energyInverse*energyInverse;
+
+	  if(S9Clu[nClu] > 1.123)
+	    tCut = 4.0;  // minimum value for the default time cut                                                  
+	  tCut *= twoDimensionTimeCutFactor_;  // rescale the size of the default 2D cut                             
+	  
+	  if(fabs(seedTimeClu[nClu]) > tCut) {
+	    goodTimingCheck = false;
+	  }
+	  //                                                                                                           
+	  // Check timing for clusters with 2 or more crystals                                                     
+	  //                                                                                                            
+	  if(doWeightedTimeCut_ && nCryinclu > 1 && nCryinclu <= 9) {
+	    if(fabs(weightedTimeClu[nClu] - seedTimeClu[nClu]) > tCut) {
+	      goodTimingCheck = false;
+	    }
+	  } // check weighted time for clusters with two or more crystals                                             
+	} // check for doing two dimensional timing cuts on the seed crystal of the cluster                           
+
+	if(goodTimingCheck) {
+	  etaCluUncorrected[nClu] = etaForZEqualsZero;
+	  double thetaUncorrected = 2.0*atan(exp(-etaCluUncorrected[nClu]));
+	  zClu[nClu] = 100.0*rECal/tan(thetaUncorrected);  // Z value of cluster in cm                            
+	  nClu++;
+	} // accept this cluster as having good timing                                                                
       } // loop over seeds
       
     }            // rhEBpi0.valid() ends
@@ -866,8 +972,9 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 
 	PhotonClusterPt->Fill(clustrPt);      
 	
-      }      
+      }
       // These cuts are used as the global cuts below for the pi0 mass histograms
+      ShowerShapeCut->Fill(clustrS49);
       
       if(clustrEnr > clustEnrCut && clustrPt > clustPtCut &&
 	 clustrS49 > clustS49Cut && clustrS1 > clustS1Cut &&
@@ -887,6 +994,7 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustS49 = clustrS49;
 	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].clustS25 = clustrS25;
 	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].hfAllAngle = HFAngle;
+	acceptedClusterInformationArray[currentBufferEventIndexCluster][currentAcceptedClusterNumber].nCryClu = nCryClu[kCluster]; 
 		
 	currentAcceptedClusterNumber++;
 	
@@ -921,6 +1029,8 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	float xCluster1 = rECal*cos(phiCluster1);
 	float yCluster1 = rECal*sin(phiCluster1);
 	float zCluster1 = rECal/tan(clust1Theta);
+
+	int nCryClu1 = acceptedClusterInformationArray[currentBufferEventIndexCluster][jCluster1].nCryClu; 
 	
 	for(int kBuffer=0; kBuffer<bufferDepth; kBuffer++) {//=======Loop over OTHER events====================
 	  bool sameEventCheck = false;
@@ -973,7 +1083,15 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	    float pxsum = p1x + p2x;
 	    float pysum = p1y + p2y;
 	    float pi0Pt = sqrt(pxsum*pxsum + pysum*pysum);
-	    
+
+	    int nCryClu2 = acceptedClusterInformationArray[kBuffer][jCluster2].nCryClu;
+	    //                                                                                                                    
+	    // Check for cluster crystal limits                                                                                   
+	    //                                                                                                                    
+	    if(useClusterCrystalLimit_ && useClusterCrystalLimitLowPtOnly_  && pi0Pt < clusterCrystalLimitLowPtOnly_ &&
+	       (nCryClu1 < lowCrystalLimit_ || nCryClu1 > highCrystalLimit_ ||
+		nCryClu2 < lowCrystalLimit_ || nCryClu2 > highCrystalLimit_))
+	      continue; // reject this pair because of the cluster crystal limits check  	    
 	    
 	    float pi0Phi = atan2(pysum, pxsum); 
 	    float pzsum = p1z + p2z;
@@ -1054,29 +1172,36 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	      continue;
 	    if(pi0Eta <= lowEtaLimit || pi0Eta >= highEtaLimit)
 	      continue;
+
+	    double effpi0 = effhisto_pi0->GetBinContent(effhisto_pi0->FindBin(pi0Pt,pi0Eta));
 	    
 	    if(combinedEventPi0Mass > 0.0 && combinedEventPi0Mass < maximumPi0MassForHistogram) {
 	      if(sameEventCheck) {
 		pi0MassHistSameEvent->Fill(combinedEventPi0Mass);
 		pi0PhiTrueHist->Fill(pi0Phi);
-		pi0EtaTrueHist->Fill(pi0Eta);
+		pi0EtaTrueHist->Fill(pi0Eta,1.0/effpi0);
 		
 		char histogramName1[200];
+		char histogramName2[200];
 		for(int kPt=0; kPt<bins1; kPt++) {
 		  if(pi0Pt > NptBins_[kPt] && pi0Pt <= NptBins_[kPt+1])
 		    {
 		      sprintf(histogramName1, "pi0MassSameEventPtBin%d", kPt);
 		      pi0MassHistSameEventvsPt[histogramName1]->Fill(combinedEventPi0Mass);
+		      sprintf(histogramName2, "pi0pT%d", kPt);
+		      pi0MeanPt[histogramName2]->Fill(pi0Pt,1.0/effpi0);
 		    }
 		}
-		
-		//		if(combinedEventPi0Mass >=0.066 && combinedEventPi0Mass <= 0.16) {
-		if(combinedEventPi0Mass >=0.19 && combinedEventPi0Mass < 0.24) {
-		  //	      if(combinedEventPi0Mass >=0.24 && combinedEventPi0Mass < 0.28) {
+	       
+		//		if(combinedEventPi0Mass >=0.10 && combinedEventPi0Mass <= 0.17) {
+		//		if(combinedEventPi0Mass >=0.090 && combinedEventPi0Mass <= 0.18) {
+		//		if(combinedEventPi0Mass >=0.03 && combinedEventPi0Mass < 0.09) {
+		if(combinedEventPi0Mass >=0.18 && combinedEventPi0Mass < 0.24) {
+		//		if(combinedEventPi0Mass >=0.22 && combinedEventPi0Mass < 0.28) {
 		  //Used to calculate the correlation function from the side-band
 		  _pi0Spectrum->Fill(pi0Eta, pi0Pt, occ);
 		  pi0PtTrueHist->Fill(pi0Pt);
-		  
+		  		  
 		  if(pi0HadronCorrelations_) {
 		    TVector3 pvectorPi0;
 		    pvectorPi0.SetPtEtaPhi(pi0Pt,pi0Eta,pi0Phi);
@@ -1151,13 +1276,52 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
     int nMult_trg = (int)pVect_trg.size();
     int nMult_ass = (int)pVect_ass.size();
     
+    double nMult_trg_eff_pi0=0;
+
+    for(int ntrg=0; ntrg<nMult_trg; ++ntrg)
+      {
+	TVector3 pvector_trg = (pVect_trg)[ntrg];
+	double eta_trg = pvector_trg.Eta();
+	double pt_trg = pvector_trg.Pt(); 
+
+	if(doEffCorrections_){
+	float effCorrFactor = efficiencyCorrections(pt_trg);
+	double effpi0 = effhisto_pi0->GetBinContent(effhisto_pi0->FindBin(pt_trg,eta_trg));
+	//	cout<<"pT trig = "<<pt_trg<<'\t'<<"eta_trg"<<eta_trg<<endl;
+	//	cout<<"Efficiency correction factor = "<<effCorrFactor<<'\t'<<"Efficiency = "<<effpi0<<endl;
+	nMult_trg_eff_pi0 = nMult_trg_eff_pi0 + 1.0*effCorrFactor/effpi0;
+	//nMult_trg_eff_pi0 = nMult_trg_eff_pi0 + 1.0/effpi0;
+	}
+
+	else {
+          double effpi0 = 1.0;
+          float effCorrFactor = 1.0;
+	  nMult_trg_eff_pi0 = nMult_trg_eff_pi0 + 1.0*effCorrFactor/effpi0;
+        }
+      }
+
+    //	cout<<"Uncorrected multiplicity  = "<<nMult_trg<<'\t'<<"corrected efficiency multiplicity = "<<nMult_trg_eff_pi0<<endl;
+
     for(int ntrg=0; ntrg<nMult_trg; ++ntrg)
       {
 	TVector3 pvector_trg = (pVect_trg)[ntrg];
 	double eta_trg = pvector_trg.Eta();
 	double phi_trg = pvector_trg.Phi();
-	double pt_trg = pvector_trg.Pt(); //correction
+	double pt_trg = pvector_trg.Pt(); 
 	
+	float effCorrFactor;
+	double effpi0;
+
+	if(doEffCorrections_){
+	effCorrFactor = efficiencyCorrections(pt_trg);
+	//	cout<<"pT trig = "<<pt_trg<<'\t'<<"Correction factor = "<<effCorrFactor<<endl;
+	effpi0 = effhisto_pi0->GetBinContent(effhisto_pi0->FindBin(pt_trg,eta_trg));
+	}
+	else {
+	  effpi0 = 1.0;
+	  effCorrFactor = 1.0;
+	}
+
 	for(int nass=0; nass<nMult_ass; nass++)
 	  {
 	    TVector3 pvector_ass = (pVect_ass)[nass];
@@ -1165,6 +1329,10 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 	    double phi_ass = pvector_ass.Phi();
 	    double pt_ass = pvector_ass.Pt();
 	    
+	    double effweight_ass;
+	    if(doEffCorrections_) effweight_ass = effhisto->GetBinContent(effhisto->FindBin(eta_ass,pt_ass));
+	    else effweight_ass = 1.0;
+
 	    double deltaEta = eta_ass - eta_trg;
 	    double deltaPhi = phi_ass - phi_trg;
 	    if(deltaPhi > _pi) deltaPhi = deltaPhi - 2*_pi;
@@ -1181,25 +1349,24 @@ EcalFlowNtp::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 		  {
 		    sprintf(histogramName5, "hSignalPtBin%d", kPt);
 		    
-		    //		  hSignal[histogramName5]->Fill(deltaEta,deltaPhi,1.0/nMult_trg/nMult_ass);
-		    //		  hSignal[histogramName5]->Fill(deltaEta,2*_pi - deltaPhi,1.0/nMult_trg/nMult_ass); 
-		    hSignal[histogramName5]->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
-		    hSignal[histogramName5]->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
-		    hSignal[histogramName5]->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
-		    hSignal[histogramName5]->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
-		    hSignal[histogramName5]->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg);
-		    hSignal[histogramName5]->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg); 
+		    double weight = effCorrFactor/4.0/nMult_trg_eff_pi0/effpi0/effweight_ass;
+		    hSignal[histogramName5]->Fill(fabs(deltaEta),fabs(deltaPhi),weight);
+		    hSignal[histogramName5]->Fill(-fabs(deltaEta),fabs(deltaPhi),weight);
+		    hSignal[histogramName5]->Fill(fabs(deltaEta),-fabs(deltaPhi),weight);
+		    hSignal[histogramName5]->Fill(-fabs(deltaEta),-fabs(deltaPhi),weight);
+		    hSignal[histogramName5]->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),weight);
+		    hSignal[histogramName5]->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),weight);
 		  }
 	      }
 	    }
 	    
 	    if(diHadronCorrelations_) {
-	      hSignal1->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
-	      hSignal1->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg);
-	      hSignal1->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
-	      hSignal1->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg);
-	      hSignal1->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg);
-	      hSignal1->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg); 
+	      hSignal1->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg/effweight_ass);
+	      hSignal1->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/4.0/nMult_trg/effweight_ass);
+	      hSignal1->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg/effweight_ass);
+	      hSignal1->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/4.0/nMult_trg/effweight_ass);
+	      hSignal1->Fill(fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg/effweight_ass);
+	      hSignal1->Fill(-fabs(deltaEta),2*_pi-fabs(deltaPhi),1.0/4.0/nMult_trg/effweight_ass); 
 	    }
 	  }
       }
@@ -1469,6 +1636,15 @@ void EcalFlowNtp::beginJob()
   eventsInsideCentralityWindow = 0;
   eventsOutsideCentralityWindow = 0;
 
+  TFile * file = new TFile("/home/sharmam/CMSSW_5_3_8_HI_patch2/src/Pi0Analysis/EcalFlowNtp/pPbRun2013/PAHighPt/pbsCrab/TrackCorrections_HIJING_538_OFFICIAL_Mar24.root","r");
+  //  edm::FileInPath fip("TrackCorrections_HIJING_538_OFFICIAL_Mar24.root");
+  //  TFile f(fip.fullPath().c_str(),"READ");
+  effhisto = (TH2F*)file->Get("rTotalEff3D");
+
+  TFile * file1 = new TFile("/home/sharmam/CMSSW_5_3_8_HI_patch2/src/Pi0Analysis/EcalFlowNtp/pPbRun2013/PAHighPt/pbsCrab/pi0EfficiencyWidth0.030_HiPurity120-260_S4To9_0.74_S25To9_1.0_Date20140624.root","r");
+  //  edm::FileInPath fip1("efficiencyPi0.root");
+  // TFile ff(fip1.fullPath().c_str(),"READ");
+  effhisto_pi0 = (TH2D*)file1->Get("efficiencyPi0Yields");
 
 }
 
@@ -1512,10 +1688,8 @@ void EcalFlowNtp::endJob() {
       if(!acceptedTriggerEvents[nevt_trg])
 	continue;  // skip this trigger event which has no partner event close enough in Z 
       nBackgroundFill++;
-      //      if(nBackgroundFill > 10) {
-      //  cout<<"Finished mixing ten events."<<endl;
-      //  break;
-      // }
+
+      int countGoodAssociated = 0;
 
       for(int nevt_ass=0; nevt_ass<nevttotal_ass; nevt_ass++) {
         if(nevt_trg == nevt_ass) { // check if the random trigger event matches this assocated event   
@@ -1526,19 +1700,99 @@ void EcalFlowNtp::endJob() {
         continue;    // go to the next associated event                                                                             
         }
 
+	countGoodAssociated++;
+      }
+      
+      if(countGoodAssociated < 1) {
+        cout << "\n For nevt_trg " << nevt_trg << " the number of good associated events = " << countGoodAssociated << endl;
+        continue;
+      }
+
+      int takeRandomInterval = 1;
+      if(countGoodAssociated > 10)
+        takeRandomInterval = countGoodAssociated/10 + 1 ;
+      
+      int takeAssociated = 0;
+      for(int nevt_ass=0; nevt_ass<nevttotal_ass; nevt_ass += takeRandomInterval) {
+	
+        if(nevt_trg == nevt_ass) { // check if the random trigger event matches this assocated event                               
+          continue;    // go to the next associated track                                                                          
+        }
+	
+        if(fabs((zvtxVect)[nevt_trg] - (zvtxVect)[nevt_ass])>2.0){  // check if the Z vertex of the trigger and associated are separated by more than 2 cm                                                                
+	  continue;    // go to the next associated event                                            
+	    }
+
+        takeAssociated++;
+        if(takeAssociated > 10)
+          break;
+	
 	_DeltazVertex->Fill((zvtxVect)[nevt_trg] - (zvtxVect)[nevt_ass]);
 	
 	vector<TVector3> pVectTmp_trg = (pVectVect_trg)[nevt_trg];
 	vector<TVector3> pVectTmp_ass = (pVectVect_ass)[nevt_ass];
 	int nMult_trg1 = pVectTmp_trg.size();
 	int nMult_ass1 = pVectTmp_ass.size();
+
+	double nMult_trg_pi0_eff=0;
+
+	for(int ntrg=0; ntrg<nMult_trg1; ++ntrg)
+	  {
+	    TVector3 pvectorTmp_trg = pVectTmp_trg[ntrg];
+	    double eta_trg = pvectorTmp_trg.Eta();
+	    double pt_trg = pvectorTmp_trg.Pt();
+
+	    float effCorrFactor;
+	    double effpi0;
+
+	    if(doEffCorrections_){
+	      effCorrFactor = efficiencyCorrections(pt_trg);
+	      effpi0 = effhisto_pi0->GetBinContent(effhisto_pi0->FindBin(pt_trg,eta_trg));
+	      nMult_trg_pi0_eff = nMult_trg_pi0_eff + 1.0*effCorrFactor/effpi0;
+	      //	      nMult_trg_pi0_eff = nMult_trg_pi0_eff + 1.0/effpi0;
+	    }
+	    else {
+	      effpi0 = 1.0;
+	      effCorrFactor = 1.0;
+	      nMult_trg_pi0_eff = nMult_trg_pi0_eff + 1.0*effCorrFactor/effpi0;
+	    }
+
+	  }
 	
+	double nMult_ass_ch_eff=0;
+	for(int nass=0; nass<nMult_ass1; ++nass)
+	  {
+	    
+	    TVector3 pvectorTmp_ass = pVectTmp_ass[nass];
+	    double eta_ass = pvectorTmp_ass.Eta();
+	    double pt_ass = pvectorTmp_ass.Pt();
+
+	    double effweight_ass;
+	    if(doEffCorrections_) effweight_ass = effhisto->GetBinContent(effhisto->FindBin(eta_ass,pt_ass));
+	    else effweight_ass = 1.0;	    
+
+	    nMult_ass_ch_eff = nMult_ass_ch_eff + 1.0/effweight_ass;
+
+	  }
+
 	for(int ntrg=0; ntrg<nMult_trg1; ++ntrg)
 	  {
 	    TVector3 pvectorTmp_trg = pVectTmp_trg[ntrg];
 	    double eta_trg = pvectorTmp_trg.Eta();
 	    double phi_trg = pvectorTmp_trg.Phi();
 	    double pt_trg = pvectorTmp_trg.Pt();
+
+	    float effCorrFactor;
+	    double effpi0;
+
+	    if(doEffCorrections_){
+               effCorrFactor = efficiencyCorrections(pt_trg);
+               effpi0 = effhisto_pi0->GetBinContent(effhisto_pi0->FindBin(pt_trg,eta_trg));
+            }
+            else {
+              effpi0 = 1.0;
+              effCorrFactor = 1.0;
+            }
 	    
 	    for(int nass=0; nass<nMult_ass1; ++nass)
 	      {
@@ -1547,7 +1801,11 @@ void EcalFlowNtp::endJob() {
 		double eta_ass = pvectorTmp_ass.Eta();
 		double phi_ass = pvectorTmp_ass.Phi();
 		double pt_ass = pvectorTmp_ass.Pt();
-		
+
+		double effweight_ass;
+		if(doEffCorrections_) effweight_ass = effhisto->GetBinContent(effhisto->FindBin(eta_ass,pt_ass));
+		else effweight_ass = 1.0;
+
 		double deltaEta = eta_ass - eta_trg;
 		double deltaPhi = phi_ass - phi_trg;
 		if(deltaPhi > _pi) deltaPhi = deltaPhi - 2*_pi;
@@ -1566,12 +1824,12 @@ void EcalFlowNtp::endJob() {
 
 			//			hBackground[histogramName6]->Fill(deltaEta,deltaPhi,1.0/nMult_trg1/nMult_ass1);
 			//hBackground[histogramName6]->Fill(deltaEta,2*_pi - deltaPhi,1.0/nMult_trg1/nMult_ass1);
-			hBackground[histogramName6]->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-			hBackground[histogramName6]->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-			hBackground[histogramName6]->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-			hBackground[histogramName6]->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-			hBackground[histogramName6]->Fill(fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-			hBackground[histogramName6]->Fill(-fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
+			hBackground[histogramName6]->Fill(fabs(deltaEta),fabs(deltaPhi),1.0*effCorrFactor/nMult_trg_pi0_eff/effpi0/effweight_ass);
+			hBackground[histogramName6]->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0*effCorrFactor/nMult_trg_pi0_eff/effpi0/effweight_ass);
+			hBackground[histogramName6]->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0*effCorrFactor/nMult_trg_pi0_eff/effpi0/effweight_ass);
+			hBackground[histogramName6]->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0*effCorrFactor/nMult_trg_pi0_eff/effpi0/effweight_ass);
+			hBackground[histogramName6]->Fill(fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0*effCorrFactor/nMult_trg_pi0_eff/effpi0/effweight_ass);
+			hBackground[histogramName6]->Fill(-fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0*effCorrFactor/nMult_trg_pi0_eff/effpi0/effweight_ass);
 		      }
 		  }
 		}
@@ -1579,12 +1837,12 @@ void EcalFlowNtp::endJob() {
 		// Uncomment the above two line for analyzing pPb data
 		
        		if(diHadronCorrelations_) {
-		  hBackground1->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-		  hBackground1->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-		  hBackground1->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-		  hBackground1->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-		  hBackground1->Fill(fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
-		  hBackground1->Fill(-fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1);
+		  hBackground1->Fill(fabs(deltaEta),fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1/effweight_ass);
+		  hBackground1->Fill(-fabs(deltaEta),fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1/effweight_ass);
+		  hBackground1->Fill(fabs(deltaEta),-fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1/effweight_ass);
+		  hBackground1->Fill(-fabs(deltaEta),-fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1/effweight_ass);
+		  hBackground1->Fill(fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1/effweight_ass);
+		  hBackground1->Fill(-fabs(deltaEta),2*_pi - fabs(deltaPhi),1.0/nMult_trg1/nMult_ass1/effweight_ass);
 		}
 		
 	      }
@@ -1677,12 +1935,19 @@ void EcalFlowNtp::initHistos(const edm::Service<TFileService> & fs)
 
   TFileDirectory pi0Related = fs->mkdir( "NeutralPions" );
 
+  ShowerShapeCut = pi0Related.make<TH1D>("ShowerShapeCut", "Shower-shape cut", nMassBins, 0.0, 2.0);
+  ShowerShapeCut->SetXTitle("S4/S9 ratio");
+  ShowerShapeCut->SetYTitle("# of entries");
+
   pi0MassHistSameEvent = pi0Related.make<TH1D>("pi0MassHistSameEvent", "#pi^{0} Peak in pPb Same Events", nMassBins, 0.0, maximumPi0MassForHistogram);
   pi0MassHistSameEvent->SetXTitle("#gamma#gamma Invariant mass (GeV/c^{2})");
   pi0MassHistSameEvent->SetYTitle(countsPerBin);
 
   char histogramName[200];
   char histogramTitle[200];
+
+  char histogramName1[200];
+  char histogramTitle1[200];
 
   char histogramName2[200];
   char histogramTitle2[200];
@@ -1695,6 +1960,13 @@ void EcalFlowNtp::initHistos(const edm::Service<TFileService> & fs)
     sprintf(histogramName2, "pi0MassMixedEventPtBin%d", kPt);
     sprintf(histogramTitle2, "Mixed-event #pi^{0} for %5.2f < p_{T} < %5.2f ", NptBins_[kPt], NptBins_[kPt+1]);
     pi0MassHistMixedEventvsPt[histogramName2] = pi0Related.make<TH1D>(histogramName2, histogramTitle2, nMassBins, 0.0, maximumPi0MassForHistogram);
+
+  }
+
+  for(int kPt=0; kPt<bins1; kPt++) {
+    sprintf(histogramName1, "pi0pT%d", kPt);
+    sprintf(histogramTitle1, "Mean #pi^{0} p_{T} for %5.2f < p_{T} < %5.2f ", NptBins_[kPt], NptBins_[kPt+1]);
+    pi0MeanPt[histogramName1] = pi0Related.make<TH1D>(histogramName1, histogramTitle1, nMassBins, NptBins_[kPt], NptBins_[kPt+1]);
 
   }
 
@@ -1725,6 +1997,9 @@ void EcalFlowNtp::initHistos(const edm::Service<TFileService> & fs)
 
   Timing = pi0Related.make<TH1D>("Timing", "RecHit timing [ns]", 100, 0., 80.);
   Timing->SetXTitle("RecHit timing [ns]");
+
+  TimingInClustering = pi0Related.make<TH1D>("TimingInClustering", "RecHit timing in clustering [ns]", 100, 0., 80.);
+  Timing->SetXTitle("RecHit timing in clustering [ns]");
 
   _pi0Spectrum = pi0Related.make<TH3F>("_pi0Spectrum", ";#eta;p_{T};occ var",
 				       etaBins_.size()-1, &etaBins_[0],
@@ -1872,6 +2147,36 @@ bool EcalFlowNtp::printChildren(const SimTrack* p,
 
   return saved;
 } // printChildren
+
+float EcalFlowNtp::efficiencyCorrections(double pTtrig) {
+  //This function takes the signal fraction into account for efficiency 
+  //corrections
+  const float SignalFraction[9] = {0.08, 0.24, 0.29, 0.46, 0.59, 0.68, 0.74, 0.76, 0.77};
+
+  if(pTtrig < 1.0)  return SignalFraction[0];
+  if(pTtrig >= 1.0 && pTtrig<1.5)  return SignalFraction[1];
+  if(pTtrig >= 1.5 && pTtrig<2.0)  return SignalFraction[2];
+  if(pTtrig >= 2.0 && pTtrig<2.5)  return SignalFraction[3];
+  if(pTtrig >= 2.5 && pTtrig<3.0)  return SignalFraction[4];
+  if(pTtrig >= 3.0 && pTtrig<3.5)  return SignalFraction[5];
+  if(pTtrig >= 3.5 && pTtrig<4.0)  return SignalFraction[6];
+  if(pTtrig >= 4.0 && pTtrig<5.0)  return SignalFraction[7];
+  if(pTtrig >= 5.0)  return SignalFraction[8];
+
+  /*  const float fakeRate[9] = {0.891, 0.753, 0.757, 0.662, 0.568, 0.495, 0.442, 0.415, 0.415};
+
+  if(pTtrig < 1.0)  return (1 - fakeRate[0]);
+  if(pTtrig >= 1.0 && pTtrig<1.5)  return (1 - fakeRate[1]);
+  if(pTtrig >= 1.5 && pTtrig<2.0)  return (1 - fakeRate[2]);
+  if(pTtrig >= 2.0 && pTtrig<2.5)  return (1 - fakeRate[3]);
+  if(pTtrig >= 2.5 && pTtrig<3.0)  return (1 - fakeRate[4]);
+  if(pTtrig >= 3.0 && pTtrig<3.5)  return (1 - fakeRate[5]);
+  if(pTtrig >= 3.5 && pTtrig<4.0)  return (1 - fakeRate[6]);
+  if(pTtrig >= 4.0 && pTtrig<5.0)  return (1 - fakeRate[7]);
+  if(pTtrig >= 5.0)  return (1 - fakeRate[8]);*/
+
+  return 0.6;
+}
 
 float EcalFlowNtp::crystalCorrectionFunction(int indexCrystal, float ecalEnergy) {
   // Energy correction factors according to number of crystals in the cluster                                        
